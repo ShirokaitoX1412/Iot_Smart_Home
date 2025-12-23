@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "author": "Fixed by ChatGPT",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": -240,
+      "left": 150,
+      "attrs": { "temperature": "25", "humidity": "53" }
+    },
+
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": 240,
+      "left": -150,
+      "attrs": { "pins": "i2c" }
+    },
+
+    {
+      "type": "wokwi-photoresistor-sensor",
+      "id": "ldr1",
+      "top": 50,
+      "left": 210,
+      "attrs": {}
+    },
+
+    {
+      "type": "wokwi-slide-potentiometer",
+      "id": "slider1",
+      "top": -215,
+      "left": -280,
+      "attrs": { "travelLength": "30" }
+    },
+
+    {
+      "type": "wokwi-pir-motion-sensor",
+      "id": "pir1",
+      "top": -25,
+      "left": 380,
+      "attrs": {}
+    },
+
+    {
+      "type": "wokwi-led",
+      "id": "led_pir",
+      "top": -110,
+      "left": 310,
+      "attrs": { "color": "blue", "label": "PIR" }
+    },
+
+    {
+      "type": "wokwi-led",
+      "id": "led_heater",
+      "top": 110,
+      "left": 320,
+      "attrs": { "color": "blue", "label": "LO SUOI" }
+    },
+
+    {
+      "type": "wokwi-led",
+      "id": "led_fan",
+      "top": 150,
+      "left": 320,
+      "attrs": { "color": "green", "label": "QUAT" }
+    },
+
+    {
+      "type": "wokwi-led",
+      "id": "led_ac",
+      "top": 190,
+      "left": 320,
+      "attrs": { "color": "red", "label": "DIEU HOA" }
+    }
+  ],
+
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+
+    [ "esp:3V3", "dht1:VCC", "red", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "dht1:SDA", "esp:15", "green", [] ],
+
+    [ "esp:21", "lcd1:SDA", "green", [] ],
+    [ "esp:22", "lcd1:SCL", "yellow", [] ],
+    [ "esp:3V3", "lcd1:VCC", "red", [] ],
+    [ "lcd1:GND", "esp:GND.2", "black", [] ],
+
+    [ "ldr1:VCC", "esp:3V3", "red", [] ],
+    [ "ldr1:GND", "esp:GND.3", "black", [] ],
+    [ "ldr1:AO", "esp:34", "green", [] ],
+
+    [ "slider1:VCC", "esp:3V3", "red", [] ],
+    [ "slider1:GND", "esp:GND.4", "black", [] ],
+    [ "slider1:SIG", "esp:35", "green", [] ],
+
+    [ "pir1:VCC", "esp:5V", "red", [] ],
+    [ "pir1:GND", "esp:GND.5", "black", [] ],
+    [ "pir1:OUT", "esp:27", "green", [] ],
+
+    [ "led_pir:A", "esp:4", "green", [] ],
+    [ "led_pir:C", "esp:GND.6", "black", [] ],
+
+    [ "led_heater:A", "esp:13", "green", [] ],
+    [ "led_heater:C", "esp:GND.7", "black", [] ],
+
+    [ "led_fan:A", "esp:12", "green", [] ],
+    [ "led_fan:C", "esp:GND.8", "black", [] ],
+
+    [ "led_ac:A", "esp:14", "green", [] ],
+    [ "led_ac:C", "esp:GND.9", "black", [] ]
+  ],
+
+  "dependencies": {}
+}

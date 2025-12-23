@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "author": "Gemini - Smart Home v2",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0 },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -180, "left": 100 },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -180, "left": -150 },
+    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": 180, "left": -200 },
+    { "type": "wokwi-servo", "id": "servo1", "top": 180, "left": 200 },
+    { "type": "wokwi-lcd1602", "id": "lcd1", "top": -300, "left": 0, "attrs": { "i2c": "true" } },
+    { "type": "wokwi-led", "id": "led_light", "top": -50, "left": 250, "attrs": { "color": "white", "label": "Den" } },
+    { "type": "wokwi-led", "id": "led_heat", "top": -50, "left": -250, "attrs": { "color": "red", "label": "Suoi" } },
+    { "type": "wokwi-led", "id": "led_fan", "top": 0, "left": -250, "attrs": { "color": "green", "label": "Quat" } },
+    { "type": "wokwi-led", "id": "led_ac", "top": 50, "left": -250, "attrs": { "color": "blue", "label": "AC" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": -60, "left": 200, "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    ["esp:GND.1", "lcd1:GND", "black", ["v0"]],
+    ["esp:5V", "lcd1:VCC", "red", ["v0"]],
+    ["esp:21", "lcd1:SDA", "orange", ["v0"]],
+    ["esp:22", "lcd1:SCL", "yellow", ["v0"]],
+
+    ["esp:GND.1", "dht1:GND", "black", ["v0"]],
+    ["esp:3V3", "dht1:VCC", "red", ["v0"]],
+    ["esp:2", "dht1:SDA", "orange", ["v0"]],
+
+    ["esp:GND.1", "ldr1:GND", "black", ["v0"]],
+    ["esp:3V3", "ldr1:VCC", "red", ["v0"]],
+    ["esp:34", "ldr1:AO", "green", ["v0"]],
+
+    ["esp:GND.1", "pir1:GND", "black", ["v0"]],
+    ["esp:5V", "pir1:VCC", "red", ["v0"]],
+    ["esp:27", "pir1:OUT", "green", ["v0"]],
+
+    ["esp:GND.1", "servo1:GND", "black", ["v0"]],
+    ["esp:5V", "servo1:V+", "red", ["v0"]],
+    ["esp:26", "servo1:PWM", "green", ["v0"]],
+
+    ["esp:25", "r1:1", "blue", ["v0"]],
+    ["r1:2", "led_light:A", "blue", ["v0"]],
+    ["esp:GND.1", "led_light:C", "black", ["v0"]],
+
+    ["esp:13", "led_heat:A", "red", ["v0"]],
+    ["esp:GND.1", "led_heat:C", "black", ["v0"]],
+    ["esp:12", "led_fan:A", "green", ["v0"]],
+    ["esp:GND.1", "led_fan:C", "black", ["v0"]],
+    ["esp:11", "led_ac:A", "blue", ["v0"]],
+    ["esp:GND.1", "led_ac:C", "black", ["v0"]]
+  ]
+}
