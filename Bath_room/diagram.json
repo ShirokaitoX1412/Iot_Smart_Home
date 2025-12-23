@@ -1,51 +1,77 @@
 {
   "version": 1,
-  "author": "Gemini - Smart Home v2",
+  "author": "Gemini AI - Bathroom Optimized",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0 },
-    { "type": "wokwi-dht22", "id": "dht1", "top": -180, "left": 100 },
-    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -180, "left": -150 },
-    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": 180, "left": -200 },
-    { "type": "wokwi-servo", "id": "servo1", "top": 180, "left": 200 },
-    { "type": "wokwi-lcd1602", "id": "lcd1", "top": -300, "left": 0, "attrs": { "i2c": "true" } },
-    { "type": "wokwi-led", "id": "led_light", "top": -50, "left": 250, "attrs": { "color": "white", "label": "Den" } },
-    { "type": "wokwi-led", "id": "led_heat", "top": -50, "left": -250, "attrs": { "color": "red", "label": "Suoi" } },
-    { "type": "wokwi-led", "id": "led_fan", "top": 0, "left": -250, "attrs": { "color": "green", "label": "Quat" } },
-    { "type": "wokwi-led", "id": "led_ac", "top": 50, "left": -250, "attrs": { "color": "blue", "label": "AC" } },
-    { "type": "wokwi-resistor", "id": "r1", "top": -60, "left": 200, "attrs": { "value": "220" } }
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": -240,
+      "left": 150,
+      "attrs": { "temperature": "18", "humidity": "60" }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": 240,
+      "left": -150,
+      "attrs": { "pins": "i2c" }
+    },
+    {
+      "type": "wokwi-pir-motion-sensor",
+      "id": "pir1",
+      "top": -25,
+      "left": 380,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_pir",
+      "top": -110,
+      "left": 310,
+      "attrs": { "color": "blue", "label": "PIR (Co nguoi)" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_heater",
+      "top": 80,
+      "left": 320,
+      "attrs": { "color": "orange", "label": "LO SUOI" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_water_heater",
+      "top": 140,
+      "left": 320,
+      "attrs": { "color": "cyan", "label": "BINH NONG LANH" }
+    }
   ],
   "connections": [
-    ["esp:GND.1", "lcd1:GND", "black", ["v0"]],
-    ["esp:5V", "lcd1:VCC", "red", ["v0"]],
-    ["esp:21", "lcd1:SDA", "orange", ["v0"]],
-    ["esp:22", "lcd1:SCL", "yellow", ["v0"]],
-
-    ["esp:GND.1", "dht1:GND", "black", ["v0"]],
-    ["esp:3V3", "dht1:VCC", "red", ["v0"]],
-    ["esp:2", "dht1:SDA", "orange", ["v0"]],
-
-    ["esp:GND.1", "ldr1:GND", "black", ["v0"]],
-    ["esp:3V3", "ldr1:VCC", "red", ["v0"]],
-    ["esp:34", "ldr1:AO", "green", ["v0"]],
-
-    ["esp:GND.1", "pir1:GND", "black", ["v0"]],
-    ["esp:5V", "pir1:VCC", "red", ["v0"]],
-    ["esp:27", "pir1:OUT", "green", ["v0"]],
-
-    ["esp:GND.1", "servo1:GND", "black", ["v0"]],
-    ["esp:5V", "servo1:V+", "red", ["v0"]],
-    ["esp:26", "servo1:PWM", "green", ["v0"]],
-
-    ["esp:25", "r1:1", "blue", ["v0"]],
-    ["r1:2", "led_light:A", "blue", ["v0"]],
-    ["esp:GND.1", "led_light:C", "black", ["v0"]],
-
-    ["esp:13", "led_heat:A", "red", ["v0"]],
-    ["esp:GND.1", "led_heat:C", "black", ["v0"]],
-    ["esp:12", "led_fan:A", "green", ["v0"]],
-    ["esp:GND.1", "led_fan:C", "black", ["v0"]],
-    ["esp:11", "led_ac:A", "blue", ["v0"]],
-    ["esp:GND.1", "led_ac:C", "black", ["v0"]]
-  ]
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:3V3", "dht1:VCC", "red", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "dht1:SDA", "esp:15", "green", [] ],
+    [ "esp:21", "lcd1:SDA", "green", [] ],
+    [ "esp:22", "lcd1:SCL", "yellow", [] ],
+    [ "esp:3V3", "lcd1:VCC", "red", [] ],
+    [ "lcd1:GND", "esp:GND.2", "black", [] ],
+    [ "pir1:VCC", "esp:5V", "red", [] ],
+    [ "pir1:GND", "esp:GND.5", "black", [] ],
+    [ "pir1:OUT", "esp:27", "green", [] ],
+    [ "led_pir:A", "esp:4", "green", [] ],
+    [ "led_pir:C", "esp:GND.6", "black", [] ],
+    [ "led_heater:A", "esp:13", "green", [] ],
+    [ "led_heater:C", "esp:GND.7", "black", [] ],
+    [ "led_water_heater:A", "esp:25", "blue", [] ],
+    [ "led_water_heater:C", "esp:GND.10", "black", [] ]
+  ],
+  "dependencies": {}
 }
