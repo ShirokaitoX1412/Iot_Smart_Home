@@ -1,7 +1,7 @@
-# 🏠 Smart Home ESP32 – Living Room & Bedroom System
+# 🏠 Smart Home ESP32 
 
 ## 📌 Giới thiệu
-Dự án mô phỏng **hệ thống Smart Home** sử dụng **ESP32** trên nền tảng **Wokwi Simulator**, bao gồm hai khu vực:
+Dự án mô phỏng **hệ thống Smart Home** sử dụng **ESP32** , bao gồm hai khu vực:
 
 - **Living Room**: Điều khiển nhiệt độ, đèn, rèm cửa
 - **Bedroom**: Giám sát môi trường và hiển thị thông tin trên LCD
