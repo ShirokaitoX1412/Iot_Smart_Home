@@ -1,115 +1,113 @@
 #include <Arduino.h>
-#include "DHT.h"
-#include <ESP32Servo.h>
+#include <DHTesp.h>
+#include <LiquidCrystal_I2C.h>
 
-/* ===== Khai báo chân ===== */
-#define DHTPIN 2 
-#define DHTTYPE DHT22 
+// ================= CHÂN KẾT NỐI =================
+const int LED_HEARTBEAT = 26;
+const int LED_LO_SUOI   = 13;   
+const int LED_BINH_NONGLANH = 25; 
 
-const int LDR_PIN   = 34; 
-const int PIR_PIN   = 27; 
-const int LED_PIN   = 25; 
-const int SERVO_PIN = 26; 
+const int DHT_PIN = 15;
+const int PIR_PIN = 27;
+const int PIR_LED = 4;
+const int LDR_PIN = 34;      
+const int SLIDER_DUST = 35;  
 
-const int LO_SUOI   = 13;
-const int QUAT      = 12;
-const int DIEU_HOA  = 11;
+// ================= CẤU HÌNH THIẾT BỊ =================
+#define I2C_ADDR     0x27
+#define LCD_COLUMNS  20
+#define LCD_LINES    4
 
-/* ===== Ngưỡng cài đặt ===== */
-const int DARK_THRESHOLD = 300;   
-const int SUNNY_LUX      = 900;   
-const int PIR_THRESHOLD  = 2000;  
+DHTesp dhtSensor;
+LiquidCrystal_I2C lcd(I2C_ADDR, LCD_COLUMNS, LCD_LINES);
 
-const int CURTAIN_OPEN   = 30;    
-const int CURTAIN_CLOSE  = 180;   
-
-DHT dht(DHTPIN, DHTTYPE);
-Servo curtain;
+// ================= BIẾN THỜI GIAN GIẢ LẬP =================
+int fakeHour = 5; 
+int fakeMinute = 55;
+unsigned long lastTick = 0;
 
 void setup() {
-  Serial.begin(9600);
-  dht.begin();
-  
-  pinMode(LO_SUOI, OUTPUT);
-  pinMode(QUAT, OUTPUT);
-  pinMode(DIEU_HOA, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
+  Serial.begin(115200);
+  delay(1000); 
+
+  pinMode(LED_HEARTBEAT, OUTPUT);
+  pinMode(LED_LO_SUOI, OUTPUT);
+  pinMode(LED_BINH_NONGLANH, OUTPUT);
+  pinMode(PIR_LED, OUTPUT);
   pinMode(PIR_PIN, INPUT);
+  pinMode(LDR_PIN, INPUT);
 
-  // Cấu hình cho Servo trên ESP32
-  ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  curtain.setPeriodHertz(50);    
-  curtain.attach(SERVO_PIN, 500, 2400); 
-  
-  curtain.write(CURTAIN_CLOSE); 
+  dhtSensor.setup(DHT_PIN, DHTesp::DHT22);
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
 
-  Serial.println("=========================================");
-  Serial.println("   HE THONG NHA THONG MINH KHOI DONG     ");
-  Serial.println("=========================================");
+  Serial.println("\n--- BATHROOM SYSTEM START ---");
+  // In tiêu đề cột để nhìn Log cho thẳng
+  Serial.println("TIME  | TEMP  | HUM   | PIR | DUST  | LDR | HEATER | W-HEATER");
+  Serial.println("------------------------------------------------------------");
 }
 
 void loop() {
-  // --- 1. Đọc cảm biến ---
-  float temp = dht.readTemperature();
-  int luxValue = analogRead(LDR_PIN);  
-  int pirValue = analogRead(PIR_PIN); 
+  static unsigned long lastUpdate = 0;
+  bool timeChanged = false;
 
-  // --- 2. Logic điều khiển Nhiệt độ ---
-  String thietBiNhiet = "";
-  if (!isnan(temp)) {
-    if (temp < 22) {
-      digitalWrite(LO_SUOI, HIGH); digitalWrite(QUAT, LOW); digitalWrite(DIEU_HOA, LOW);
-      thietBiNhiet = "Bat Lo Suoi";
-    } else if (temp <= 27) {
-      digitalWrite(LO_SUOI, LOW); digitalWrite(QUAT, HIGH); digitalWrite(DIEU_HOA, LOW);
-      thietBiNhiet = "Bat Quat";
-    } else {
-      digitalWrite(LO_SUOI, LOW); digitalWrite(QUAT, LOW); digitalWrite(DIEU_HOA, HIGH);
-      thietBiNhiet = "Bat Dieu Hoa";
+  // 1. CẬP NHẬT THỜI GIAN GIẢ LẬP
+  if (millis() - lastTick >= 1000) {
+    fakeMinute++; 
+    if (fakeMinute >= 60) {
+      fakeMinute = 0;
+      fakeHour++;
     }
+    if (fakeHour >= 24) fakeHour = 0;
+    lastTick = millis();
+    digitalWrite(LED_HEARTBEAT, !digitalRead(LED_HEARTBEAT));
+    timeChanged = true; 
   }
 
-  // --- 3. Logic điều khiển ĐÈN ---
-  bool lightOn = false;
-  String lyDoDen = "";
-  if (luxValue < DARK_THRESHOLD) {
-    if (pirValue > PIR_THRESHOLD) {
-      lightOn = true;  
-      lyDoDen = "Toi + Co nguoi";
-    } else {
-      lightOn = false; 
-      lyDoDen = "Toi + Khong nguoi";
-    }
-  } else {
-    lightOn = false;
-    lyDoDen = "Troi dang sang";
-  }
-  digitalWrite(LED_PIN, lightOn ? HIGH : LOW);
+  // 2. ĐỌC DỮ LIỆU CẢM BIẾN
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int pirState = digitalRead(PIR_PIN);
+  digitalWrite(PIR_LED, pirState);
 
-  // --- 4. Logic điều khiển RÈM ---
-  String trangThaiRem = "";
-  if (luxValue < DARK_THRESHOLD) {
-    curtain.write(CURTAIN_CLOSE);
-    trangThaiRem = "DONG (Troi toi)";
-  } else if (luxValue <= SUNNY_LUX) {
-    curtain.write(CURTAIN_OPEN);
-    trangThaiRem = "MO (Anh sang dep)";
-  } else {
-    curtain.write(CURTAIN_CLOSE);
-    trangThaiRem = "DONG (Nang qua gat)";
+  int ldrRaw = analogRead(LDR_PIN);
+  int ldrPercent = map(ldrRaw, 4095, 0, 0, 100); 
+
+  int dustADC = analogRead(SLIDER_DUST);
+  float dustPM = ((float)dustADC * (3.3f / 4095.0f) - 0.6f) * 100.0f;
+  if (dustPM < 0) dustPM = 0;
+
+  // 3. LOGIC ĐIỀU KHIỂN
+  bool heaterStatus = (data.temperature < 20.0 && pirState == HIGH);
+  digitalWrite(LED_LO_SUOI, heaterStatus ? HIGH : LOW);
+
+  bool waterHeaterStatus = (fakeHour == 6 && pirState == HIGH);
+  digitalWrite(LED_BINH_NONGLANH, waterHeaterStatus ? HIGH : LOW);
+
+  // 4. CHỈ CẬP NHẬT LCD VÀ SERIAL KHI THỜI GIAN NHẢY (1 giây 1 lần)
+  if (timeChanged) {
+    // In Serial trước, dùng nháy kép để đảm bảo không bị ngắt quãng
+    Serial.print("\r"); // Đưa con trỏ về đầu dòng (nếu cần)
+    Serial.flush();     // Đợi gửi hết dữ liệu cũ
+    
+    Serial.printf("%02d:%02d | %4.1fC | %4.1f%% | %3s | %5.1f | %3d%% | %-6s | %-8s\n", 
+                  fakeHour, fakeMinute, 
+                  data.temperature, data.humidity,
+                  pirState ? "YES" : "NO",
+                  dustPM, ldrPercent,
+                  heaterStatus ? "ON" : "OFF",
+                  waterHeaterStatus ? "ON" : "OFF");
+
+    // Cập nhật LCD ngay sau đó
+    lcd.setCursor(0, 0);
+    lcd.printf("%02d:%02d PIR:%-3s LDR:%3d%%", fakeHour, fakeMinute, pirState ? "YES" : "NO", ldrPercent);
+    lcd.setCursor(0, 1);
+    lcd.printf("T:%2.1fC H:%2.1f%%", data.temperature, data.humidity);
+    lcd.setCursor(0, 2);
+    lcd.printf("Dust: %5.1f ug/m3", dustPM);
+    lcd.setCursor(0, 3);
+    lcd.printf("Htr:%-3s W-Heater:%-3s", heaterStatus ? "ON" : "OFF", waterHeaterStatus ? "ON" : "OFF");
   }
 
-  // --- 5. Serial Monitor (In chi tiết trạng thái) ---
-  Serial.println("\n--- CAP NHAT HE THONG ---");
-  Serial.printf("[CAM BIEN] Lux: %d | PIR: %d | Temp: %.1fC\n", luxValue, pirValue, temp);
-  
-  Serial.print("[DIEU KHIEN] ");
-  Serial.print("Den: " + String(lightOn ? "ON " : "OFF") + " (" + lyDoDen + ") | ");
-  Serial.println("Rem: " + trangThaiRem);
-  
-  Serial.println("[NHIET DO] " + thietBiNhiet);
-  Serial.println("-----------------------------------------");
-  
-  delay(2000); // Đợi 2 giây để dễ quan sát Serial
+  delay(20); 
 }
