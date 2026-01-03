@@ -3,75 +3,114 @@
   "author": "Gemini AI - Bathroom Optimized",
   "editor": "wokwi",
   "parts": [
-    {
-      "type": "board-esp32-devkit-c-v4",
-      "id": "esp",
-      "top": 0,
-      "left": 0,
-      "attrs": {}
-    },
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": -14.36, "attrs": {} },
     {
       "type": "wokwi-dht22",
       "id": "dht1",
-      "top": -240,
-      "left": 150,
-      "attrs": { "temperature": "18", "humidity": "60" }
+      "top": -230.1,
+      "left": 148.2,
+      "attrs": { "temperature": "15.2", "humidity": "60" }
     },
     {
       "type": "wokwi-lcd1602",
       "id": "lcd1",
-      "top": 240,
-      "left": -150,
+      "top": 313.6,
+      "left": -61.6,
       "attrs": { "pins": "i2c" }
     },
-    {
-      "type": "wokwi-pir-motion-sensor",
-      "id": "pir1",
-      "top": -25,
-      "left": 380,
-      "attrs": {}
-    },
+    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": -24.8, "left": 376.62, "attrs": {} },
     {
       "type": "wokwi-led",
       "id": "led_pir",
-      "top": -110,
-      "left": 310,
+      "top": -51.6,
+      "left": 311,
       "attrs": { "color": "blue", "label": "PIR (Co nguoi)" }
     },
     {
       "type": "wokwi-led",
       "id": "led_heater",
-      "top": 80,
-      "left": 320,
+      "top": 82.8,
+      "left": 349.4,
       "attrs": { "color": "orange", "label": "LO SUOI" }
     },
     {
       "type": "wokwi-led",
       "id": "led_water_heater",
-      "top": 140,
-      "left": 320,
+      "top": 159.6,
+      "left": 291.8,
       "attrs": { "color": "cyan", "label": "BINH NONG LANH" }
-    }
+    },
+    { "type": "wokwi-slide-switch", "id": "sw1", "top": -53.2, "left": -131.3, "attrs": {} },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 6.2,
+      "left": 240,
+      "attrs": { "label": "BTN LO SUOI", "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_warning",
+      "top": -42,
+      "left": 167,
+      "attrs": { "color": "red", "label": "LOG CANH BAO" }
+    },
+    {
+      "type": "wokwi-membrane-keypad",
+      "id": "keypad1",
+      "top": -88.4,
+      "left": -541.6,
+      "attrs": {}
+    },
+    { "type": "wokwi-servo", "id": "servo1", "top": -203.6, "left": -470.4, "attrs": {} }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
     [ "esp:RX", "$serialMonitor:TX", "", [] ],
-    [ "esp:3V3", "dht1:VCC", "red", [] ],
-    [ "dht1:GND", "esp:GND.1", "black", [] ],
-    [ "dht1:SDA", "esp:15", "green", [] ],
-    [ "esp:21", "lcd1:SDA", "green", [] ],
-    [ "esp:22", "lcd1:SCL", "yellow", [] ],
-    [ "esp:3V3", "lcd1:VCC", "red", [] ],
-    [ "lcd1:GND", "esp:GND.2", "black", [] ],
-    [ "pir1:VCC", "esp:5V", "red", [] ],
     [ "pir1:GND", "esp:GND.5", "black", [] ],
-    [ "pir1:OUT", "esp:27", "green", [] ],
-    [ "led_pir:A", "esp:4", "green", [] ],
     [ "led_pir:C", "esp:GND.6", "black", [] ],
-    [ "led_heater:A", "esp:13", "green", [] ],
     [ "led_heater:C", "esp:GND.7", "black", [] ],
-    [ "led_water_heater:A", "esp:25", "blue", [] ],
-    [ "led_water_heater:C", "esp:GND.10", "black", [] ]
+    [ "led_water_heater:C", "esp:GND.10", "black", [] ],
+    [
+      "esp:GND.1",
+      "servo1:GND",
+      "black",
+      [ "h-177.41", "v-96", "h0", "v-67.2", "h-268.8", "v-57.6" ]
+    ],
+    [ "servo1:V+", "esp:5V", "green", [ "h-19.2", "v38.5", "h268.8", "v153.6", "h0", "v67.2" ] ],
+    [ "servo1:PWM", "esp:14", "green", [ "h-9.6", "v19.4", "h268.8", "v153.6" ] ],
+    [ "lcd1:GND", "esp:GND.1", "black", [ "h-26.8", "v-118.4" ] ],
+    [ "lcd1:VCC", "esp:5V", "red", [ "h-36.4", "v-79.9" ] ],
+    [ "lcd1:SDA", "esp:21", "green", [ "h-17.2", "v-70.2", "h278.4", "v9.6" ] ],
+    [ "lcd1:SCL", "esp:22", "green", [ "h-26.8", "v-70.1", "h307.2", "v-153.6" ] ],
+    [ "dht1:VCC", "esp:3V3", "red", [ "v0", "h-19.2" ] ],
+    [ "esp:GND.1", "dht1:GND", "black", [ "h-14.21", "v-220.8", "h163.2" ] ],
+    [ "esp:15", "dht1:SDA", "green", [ "v0", "h33.64", "v-259.2" ] ],
+    [ "esp:5V", "pir1:VCC", "red", [ "h-4.61", "v38.4", "h403.2" ] ],
+    [ "esp:4", "pir1:OUT", "green", [ "h24.04", "v96", "h297.6" ] ],
+    [ "esp:GND.1", "pir1:GND", "black", [ "h-23.81", "v86.4", "h451.2" ] ],
+    [ "keypad1:R1", "esp:32", "green", [ "v9.6", "h134.4" ] ],
+    [ "keypad1:R2", "esp:33", "green", [ "v9.6", "h172.4" ] ],
+    [ "esp:26", "keypad1:R4", "green", [ "h-254.21", "v172.8", "h-153.6" ] ],
+    [ "esp:27", "keypad1:C1", "green", [ "h-196.61", "v163.2", "h-201.6" ] ],
+    [ "esp:12", "keypad1:C2", "green", [ "v0", "h-215.81", "v134.4", "h-172.8" ] ],
+    [ "esp:13", "keypad1:C3", "green", [ "h-177.41", "v124.8", "h-19.2" ] ],
+    [ "esp:23", "keypad1:C4", "green", [ "h14.44", "v240", "h-432" ] ],
+    [ "led_pir:A", "esp:17", "green", [ "v0" ] ],
+    [ "led2:C", "esp:GND.3", "green", [ "v0" ] ],
+    [ "led_pir:C", "esp:GND.3", "green", [ "v0" ] ],
+    [ "led_heater:C", "esp:GND.3", "green", [ "v9.6", "h-239.6", "v-48" ] ],
+    [ "led_water_heater:C", "esp:GND.3", "green", [ "v0", "h-162.8", "v-115.2" ] ],
+    [ "sw1:1", "esp:GND.3", "green", [ "v0" ] ],
+    [ "esp:2", "led2:A", "green", [ "h0" ] ],
+    [ "led_heater:A", "esp:19", "green", [ "v0" ] ],
+    [ "led_warning:C", "esp:GND.3", "green", [ "v0" ] ],
+    [ "led_warning:A", "esp:2", "green", [ "v0" ] ],
+    [ "led_water_heater:A", "esp:16", "green", [ "v19.2", "h-220.8" ] ],
+    [ "esp:25", "keypad1:R3", "green", [ "v0", "h-239.85", "v172.8", "h-172.8" ] ],
+    [ "btn1:1.l", "esp:5", "green", [ "h-134.4", "v96" ] ],
+    [ "esp:18", "sw1:2", "green", [ "h-201.6", "v-48" ] ],
+    [ "btn1:2.r", "esp:GND.3", "green", [ "h9.8", "v29" ] ]
   ],
   "dependencies": {}
 }
