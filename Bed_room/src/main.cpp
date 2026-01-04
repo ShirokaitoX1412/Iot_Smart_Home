@@ -185,6 +185,26 @@ void setup() {
       delay(1000);
       forceUnlockStatusUpdate();
       Serial.println("[SETUP] Sent initial unlock status (false) to DB");
+      
+      // Clear password cũ trong DB khi khởi động để tránh nhận password cũ
+      HTTPClient clearHttp;
+      String clearUrl = String(apiBaseUrl) + "/api/rooms/" + roomId;
+      clearHttp.begin(clearUrl);
+      clearHttp.addHeader("Content-Type", "application/json");
+      DynamicJsonDocument clearDoc(256);
+      clearDoc["unlockPassword"] = "";
+      clearDoc["unlockRequestTime"] = 0;
+      clearDoc["unlockMessage"] = "";
+      String clearJson;
+      serializeJson(clearDoc, clearJson);
+      int clearCode = clearHttp.PUT(clearJson);
+      clearHttp.end();
+      Serial.print("[SETUP] Cleared old unlock data from DB, code: ");
+      Serial.println(clearCode);
+      
+      // Reset lastUnlockRequestTime để đảm bảo chỉ nhận password mới
+      lastUnlockRequestTime = 0;
+      Serial.println("[SETUP] Reset lastUnlockRequestTime to 0");
     }
   }
   
@@ -837,32 +857,53 @@ void controlTask(void *pvParameters) {
               String clearUrl = String(apiBaseUrl) + "/api/rooms/" + roomId;
               clearHttp.begin(clearUrl);
               clearHttp.addHeader("Content-Type", "application/json");
+              clearHttp.setTimeout(3000);
+              clearHttp.setConnectTimeout(2000);
               DynamicJsonDocument clearDoc(256);
               clearDoc["unlockPassword"] = "";
               clearDoc["unlockRequestTime"] = 0;
               clearDoc["unlockMessage"] = "success"; // Thông báo thành công
               String clearJson;
               serializeJson(clearDoc, clearJson);
+              
               int clearCode = clearHttp.PUT(clearJson);
               clearHttp.end();
-              Serial.print("[Control Task] Cleared unlock request and sent success message, code: ");
-              Serial.println(clearCode);
-            } else {
-              Serial.println("[Control Task] Password incorrect from app.");
               
-              // Gửi thông báo lỗi lên DB
+              if (clearCode == HTTP_CODE_OK) {
+                Serial.println("[Control Task] ✓ Success message sent to app successfully (HTTP 200)");
+              } else {
+                Serial.print("[Control Task] ✗ Failed to send success message, HTTP code: ");
+                Serial.println(clearCode);
+              }
+            } else {
+              Serial.println("[Control Task] Password incorrect from app - sending error message to DB...");
+              
+              // Gửi thông báo lỗi và clear unlock request từ DB để tránh xử lý lại
               HTTPClient errorHttp;
               String errorUrl = String(apiBaseUrl) + "/api/rooms/" + roomId;
               errorHttp.begin(errorUrl);
               errorHttp.addHeader("Content-Type", "application/json");
+              errorHttp.setTimeout(3000);
+              errorHttp.setConnectTimeout(2000);
               DynamicJsonDocument errorDoc(256);
+              errorDoc["unlockPassword"] = ""; // Clear password
+              errorDoc["unlockRequestTime"] = 0; // Clear request time
               errorDoc["unlockMessage"] = "error"; // Thông báo lỗi
               String errorJson;
               serializeJson(errorDoc, errorJson);
+              
               int errorCode = errorHttp.PUT(errorJson);
               errorHttp.end();
-              Serial.print("[Control Task] Sent error message to DB, code: ");
-              Serial.println(errorCode);
+              
+              if (errorCode == HTTP_CODE_OK) {
+                Serial.println("[Control Task] ✓ Error message sent to app successfully (HTTP 200)");
+              } else {
+                Serial.print("[Control Task] ✗ Failed to send error message to app, HTTP code: ");
+                Serial.println(errorCode);
+                // Nếu không gửi được, vẫn clear lastUnlockRequestTime để tránh xử lý lại
+                lastUnlockRequestTime = requestTime;
+                Serial.println("[Control Task] Cleared lastUnlockRequestTime to prevent reprocessing");
+              }
             }
           } else {
             if (newPassword.length() == 0) {
