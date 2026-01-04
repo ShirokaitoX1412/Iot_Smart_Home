@@ -118,6 +118,7 @@ void apiTask(void *pvParameters); // FreeRTOS task function
 void controlTask(void *pvParameters); // FreeRTOS task function để fetch control commands
 void forceDataUpdate(); // Force gửi data lên DB ngay khi bấm nút vật lý
 void forceUnlockStatusUpdate(); // Force gửi trạng thái unlock lên DB
+void sendMotionNotification(); // Gửi push notification khi phát hiện motion
 
 // ================== SETUP ==================
 void setup() {
@@ -315,6 +316,11 @@ void loop() {
             if (currentMotion != lastSentMotion) {
               Serial.print("Motion:"); Serial.print(currentMotion ? "YES" : "NO"); Serial.print(" ");
               hasAnyChange = true;
+              
+              // Nếu phát hiện motion mới (từ false -> true), gửi push notification
+              if (currentMotion && !lastSentMotion) {
+                sendMotionNotification();
+              }
             }
             if (currentMode != lastSentMode) {
               Serial.print("Mode:"); Serial.print(currentMode ? "AUTO" : "MANUAL"); Serial.print(" ");

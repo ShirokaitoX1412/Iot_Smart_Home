@@ -116,6 +116,7 @@ void apiTask(void *pvParameters); // FreeRTOS task function
 void controlTask(void *pvParameters); // FreeRTOS task function để fetch control commands
 void forceDataUpdate(); // Force gửi data lên DB ngay khi bấm nút vật lý
 void forceUnlockStatusUpdate(); // Force gửi trạng thái unlock lên DB
+void sendMotionNotification(); // Gửi push notification khi phát hiện motion
 
 void setup() {
   Serial.begin(115200);
@@ -361,6 +362,12 @@ void loop() {
           lastSentWaterTemp = waterTemp;
           lastSentHeater = lastHeaterState;
           lastSentWaterHeater = lastWaterState;
+          
+          // Nếu phát hiện motion mới (từ false -> true), gửi push notification
+          if (currentMotion && !lastSentMotion) {
+            sendMotionNotification();
+          }
+          
           lastSentMotion = currentMotion;
           lastSentMode = currentMode; // Lưu giá trị từ switch
         } else {
@@ -906,6 +913,29 @@ void forceDataUpdate() {
     
     Serial.println("[FORCE] Data update triggered after button press");
   }
+}
+
+// Gửi push notification khi phát hiện motion
+void sendMotionNotification() {
+  if (!wifiConnected || roomId == "") return;
+  
+  // Gọi API notify trong background (không block)
+  HTTPClient http;
+  String url = String(apiBaseUrl) + "/api/rooms/" + roomId + "/notify";
+  http.begin(url);
+  http.setTimeout(3000); // Timeout ngắn vì chỉ cần trigger
+  http.setConnectTimeout(2000);
+  
+  int httpCode = http.POST("{}"); // Empty body
+  
+  if (httpCode == HTTP_CODE_OK) {
+    Serial.println("[NOTIFY] Push notification sent");
+  } else {
+    Serial.print("[NOTIFY] Failed to send notification, code: ");
+    Serial.println(httpCode);
+  }
+  
+  http.end();
 }
 
 // Force gửi trạng thái unlock lên DB ngay
