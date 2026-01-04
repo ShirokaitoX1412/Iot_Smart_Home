@@ -80,6 +80,8 @@ TaskHandle_t controlTaskHandle = NULL;
 unsigned long lastManualButtonPress = 0; // Track thời gian bấm nút vật lý cuối cùng
 const unsigned long MANUAL_BUTTON_PRIORITY_TIME = 20000; // Chặn controlTask trong 20 giây sau khi bấm nút vật lý (đủ thời gian gửi data lên DB và app cập nhật)
 unsigned long lastDataSentTime = 0; // Track thời gian gửi data lên DB cuối cùng
+String appPassword = ""; // Password từ app để unlock
+unsigned long long lastUnlockRequestTime = 0; // Thời gian request unlock từ app (dùng unsigned long long để chứa timestamp milliseconds)
 
 // Biến để track thời gian gửi cuối cùng (dùng chung giữa loop() và apiTask())
 unsigned long lastApiUpdate = 0;
@@ -101,6 +103,7 @@ float tempRoom = 0;
 bool heaterOn = false;
 bool acOn = false;
 int fanLevel = 0; // 0, 1, 2, 3
+bool autoMode = true; // Mode hiện tại (true = auto, false = manual) - có thể được set từ app hoặc switch vật lý
 bool lastAutoMode = true;
 
 // ================== FUNCTION PROTOTYPES ==================
@@ -114,6 +117,7 @@ String getRoomIdByName();
 void apiTask(void *pvParameters); // FreeRTOS task function
 void controlTask(void *pvParameters); // FreeRTOS task function để fetch control commands
 void forceDataUpdate(); // Force gửi data lên DB ngay khi bấm nút vật lý
+void forceUnlockStatusUpdate(); // Force gửi trạng thái unlock lên DB
 
 // ================== SETUP ==================
 void setup() {
@@ -169,12 +173,18 @@ void setup() {
       xTaskCreate(
         controlTask,       // Task function
         "Control_Task",    // Task name
-        4096,              // Stack size
+        8192,              // Stack size (tăng lên 8KB để tránh stack overflow với DynamicJsonDocument(1024))
         NULL,              // Parameters
         1,                 // Priority (low)
         &controlTaskHandle // Task handle
       );
       Serial.println("Control Task created");
+      
+      // Gửi trạng thái unlock ban đầu lên DB (isUnlocked = false khi khởi động)
+      // Đợi một chút để đảm bảo tasks đã sẵn sàng
+      delay(1000);
+      forceUnlockStatusUpdate();
+      Serial.println("[SETUP] Sent initial unlock status (false) to DB");
     }
   }
   
@@ -192,11 +202,12 @@ void loop() {
     return;
   }
 
-  // 2. Nếu chưa mở khóa: Chỉ chạy Keypad
+  // 2. Nếu chưa mở khóa: Chỉ chạy Keypad, KHÔNG cho phép điều khiển từ app
   if (!isUnlocked) {
     handleSecurity();
+    // Không áp dụng commands từ app khi chưa unlock
   } 
-  // 3. Nếu đã mở khóa: Chạy logic điều khiển thiết bị
+  // 3. Nếu đã mở khóa: Chạy logic điều khiển thiết bị đầy đủ
   else {
     handleSmartHome();
     
@@ -209,6 +220,7 @@ void loop() {
       static int lastSentFan = -1;
       static int lastSentLight = -1;
       static bool lastSentMotion = false;
+      static bool lastSentMode = false;
       
       // Đọc nhiệt độ TRỰC TIẾP từ DHT
       float currentTemp = dht.readTemperature();
@@ -224,6 +236,9 @@ void loop() {
       // Giống logic bật LED: chỉ bật LED khi trời tối và có motion
       bool currentMotion = (currentLight > 2500) && pirMotion;
       
+      // Đọc mode TRỰC TIẾP từ switch
+      bool currentMode = digitalRead(SW_MODE);
+      
       // Kiểm tra xem có thay đổi đáng kể không
       bool hasSignificantChange = 
         (abs(currentTemp - lastSentTemp) > 0.5) ||  // Nhiệt độ thay đổi > 0.5°C
@@ -231,7 +246,8 @@ void loop() {
         (acOn != lastSentAc) ||                     // AC thay đổi
         (fanLevel != lastSentFan) ||                 // Fan level thay đổi
         (lastSentLight != -1 && abs(currentLight - lastSentLight) > 200) || // Light thay đổi > 200
-        (currentMotion != lastSentMotion);           // Motion thay đổi
+        (currentMotion != lastSentMotion) ||         // Motion thay đổi
+        (currentMode != lastSentMode);               // Mode (auto/manual) thay đổi
       
       // CHỈ gửi khi có thay đổi đáng kể, KHÔNG gửi định kỳ
       // Vì HTTP request mất ~8 giây, gửi định kỳ mỗi 1 giây là vô nghĩa
@@ -244,7 +260,7 @@ void loop() {
             sensorData.tempRoom = currentTemp;
             sensorData.hasMotion = currentMotion;
             sensorData.lightLevel = currentLight;
-            sensorData.mode = digitalRead(SW_MODE);
+            sensorData.mode = currentMode; // Dùng currentMode đã đọc ở trên
             sensorData.heaterOn = heaterOn;
             sensorData.acOn = acOn;
             sensorData.fanLevel = fanLevel;
@@ -280,6 +296,10 @@ void loop() {
               Serial.print("Motion:"); Serial.print(currentMotion ? "YES" : "NO"); Serial.print(" ");
               hasAnyChange = true;
             }
+            if (currentMode != lastSentMode) {
+              Serial.print("Mode:"); Serial.print(currentMode ? "AUTO" : "MANUAL"); Serial.print(" ");
+              hasAnyChange = true;
+            }
             
             // Nếu không có thay đổi nào được detect, log tất cả giá trị hiện tại
             if (!hasAnyChange) {
@@ -289,6 +309,7 @@ void loop() {
               Serial.print(" Fan:"); Serial.print(fanLevel);
               Serial.print(" Light:"); Serial.print(currentLight);
               Serial.print(" Motion:"); Serial.print(currentMotion ? "YES" : "NO");
+              Serial.print(" Mode:"); Serial.print(currentMode ? "AUTO" : "MANUAL");
             }
             Serial.println();
             
@@ -299,13 +320,14 @@ void loop() {
             lastSentFan = fanLevel;
             lastSentLight = currentLight;
             lastSentMotion = currentMotion;
+            lastSentMode = currentMode;
           } else {
             // apiTask() đang xử lý, nhưng có thay đổi đáng kể
             // Chỉ cập nhật data (không set needUpdate) để apiTask() đọc được giá trị mới nhất
             sensorData.tempRoom = currentTemp;
             sensorData.hasMotion = currentMotion;
             sensorData.lightLevel = currentLight;
-            sensorData.mode = digitalRead(SW_MODE);
+            sensorData.mode = currentMode; // Dùng currentMode đã đọc ở trên
             sensorData.heaterOn = heaterOn;
             sensorData.acOn = acOn;
             sensorData.fanLevel = fanLevel;
@@ -328,6 +350,10 @@ void handleSecurity() {
         lcd.clear();
         lcd.print("DOOR OPENED!");
         Serial.println("Log: Mat khau dung. He thong kich hoat.");
+        
+        // Force gửi trạng thái unlock lên DB ngay
+        forceUnlockStatusUpdate();
+        
         delay(1500);
         tempRoom = dht.readTemperature();
       } else {
@@ -356,12 +382,23 @@ void handleSecurity() {
 
 // ================== LOGIC ĐIỀU KHIỂN PHÒNG ==================
 void handleSmartHome() {
-  bool autoMode = digitalRead(SW_MODE);
-  if (lastAutoMode && !autoMode) {
-    heaterOn = false; acOn = false; fanLevel = 0;
-    Serial.println("Mode: MANUAL - Devices Reset");
+  // Đọc mode từ switch vật lý (mặc định)
+  bool switchMode = digitalRead(SW_MODE);
+  
+  // Chỉ cập nhật autoMode từ switch vật lý nếu switch thay đổi
+  // (không ghi đè mode từ app)
+  if (switchMode != lastAutoMode) {
+    // Switch vật lý thay đổi
+    if (lastAutoMode && !switchMode) {
+      // Từ auto -> manual: reset devices
+      heaterOn = false; acOn = false; fanLevel = 0;
+      Serial.println("[Switch] Mode changed to MANUAL - Devices Reset");
+    }
+    autoMode = switchMode; // Cập nhật autoMode khi switch vật lý thay đổi
+    Serial.print("[Switch] Mode changed to: ");
+    Serial.println(autoMode ? "AUTO" : "MANUAL");
   }
-  lastAutoMode = autoMode;
+  lastAutoMode = switchMode;
 
   float t = dht.readTemperature();
   if (!isnan(t)) {
@@ -400,19 +437,21 @@ void handleSmartHome() {
   bool dataJustSent = (lastDataSentTime > 0) && (timeSinceLastDataSent < 12000); // 12 giây
   
   if (serverCommands.hasCommand && !recentlyPressedButton && !dataJustSent && !isSending) {
+    // Kiểm tra thay đổi bao gồm cả mode
     bool hasChange = (serverCommands.heaterOn != heaterOn) ||
                      (serverCommands.acOn != acOn) ||
-                     (serverCommands.fanLevel != fanLevel);
+                     (serverCommands.fanLevel != fanLevel) ||
+                     (serverCommands.mode != autoMode); // Thêm kiểm tra mode
     
     if (hasChange) {
       // Áp dụng commands từ app
       heaterOn = serverCommands.heaterOn;
       acOn = serverCommands.acOn;
       fanLevel = serverCommands.fanLevel;
-      // Mode từ app (nếu có)
+      // Mode từ app - ưu tiên mode từ app khi có command
       if (serverCommands.mode != autoMode) {
         autoMode = serverCommands.mode;
-        Serial.print("Mode changed from app: ");
+        Serial.print("[Control] Mode changed from app: ");
         Serial.println(autoMode ? "AUTO" : "MANUAL");
       }
       
@@ -421,7 +460,9 @@ void handleSmartHome() {
       digitalWrite(LED_AC, acOn);
       digitalWrite(LED_FAN, fanLevel > 0);
       
-      Serial.print("[Control] Applied from app: H=");
+      Serial.print("[Control] Applied from app: Mode=");
+      Serial.print(autoMode ? "AUTO" : "MANUAL");
+      Serial.print(" H=");
       Serial.print(heaterOn);
       Serial.print(" AC=");
       Serial.print(acOn);
@@ -443,7 +484,14 @@ void handleSmartHome() {
       Serial.println("[Control] BLOCKED - data just sent, ignoring to avoid loop");
     }
     serverCommands.hasCommand = false; // Clear để không check lại
-  } else if (autoMode) {
+  } 
+  
+  // KHÔNG ghi đè autoMode từ switch vật lý ở đây
+  // autoMode đã được cập nhật từ switch vật lý ở đầu hàm (khi switch thay đổi)
+  // hoặc từ app (khi có command từ app)
+  // Điều này đảm bảo mode từ app không bị ghi đè
+  
+  if (autoMode) {
     // Logic tự động local
     if (tempRoom >= 28) {
       acOn = true; heaterOn = false;
@@ -619,8 +667,8 @@ void apiTask(void *pvParameters) {
           
           xSemaphoreGive(dataMutex);
           
-          Serial.print("[API Task] Sending data, temp=");
-          Serial.println(temp);
+          Serial.print("[API Task] Sending data...");
+          // Serial.println(temp);
       
       // Gửi HTTP request (có thể mất vài giây, nhưng không block main loop)
       HTTPClient http;
@@ -639,6 +687,7 @@ void apiTask(void *pvParameters) {
       doc["heaterOn"] = heater;
       doc["acOn"] = ac;
       doc["fanLevel"] = fan;
+      doc["isUnlocked"] = isUnlocked; // Gửi trạng thái unlock lên DB
       
       String jsonString;
       serializeJson(doc, jsonString);
@@ -707,20 +756,141 @@ void controlTask(void *pvParameters) {
       
       if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
-        DynamicJsonDocument doc(512);
-        deserializeJson(doc, payload);
+        DynamicJsonDocument doc(1024); // Tăng size để đảm bảo đủ chỗ
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        // Debug: In ra payload để kiểm tra
+        Serial.print("[Control Task] Received payload: ");
+        Serial.println(payload);
+        
+        if (error) {
+          Serial.print("[Control Task] JSON deserialize error: ");
+          Serial.println(error.c_str());
+        }
+        
+        // Check unlock password từ app - CHỈ khi chưa mở khóa
+        if (!isUnlocked && doc.containsKey("unlockPassword") && doc.containsKey("unlockRequestTime")) {
+          String newPassword = doc["unlockPassword"].as<String>();
+          // Parse thành unsigned long long để chứa timestamp milliseconds (số lớn)
+          unsigned long long requestTime = doc["unlockRequestTime"].as<unsigned long long>();
+          
+          Serial.print("[Control Task] Found unlockPassword: '");
+          Serial.print(newPassword);
+          Serial.print("' (length: ");
+          Serial.print(newPassword.length());
+          Serial.print("), requestTime: ");
+          // In ra requestTime đầy đủ (chia thành 2 phần 32-bit)
+          if (requestTime > 0xFFFFFFFF) {
+            Serial.print((unsigned long)(requestTime >> 32));
+            Serial.print(":");
+          }
+          Serial.print((unsigned long)(requestTime & 0xFFFFFFFF));
+          Serial.print(", lastUnlockRequestTime: ");
+          if (lastUnlockRequestTime > 0xFFFFFFFF) {
+            Serial.print((unsigned long)(lastUnlockRequestTime >> 32));
+            Serial.print(":");
+          }
+          Serial.print((unsigned long)(lastUnlockRequestTime & 0xFFFFFFFF));
+          Serial.println();
+          
+          // Nếu password rỗng và requestTime = 0, reset lastUnlockRequestTime để cho phép nhận password mới
+          if (newPassword.length() == 0 && requestTime == 0) {
+            if (lastUnlockRequestTime > 0) {
+              Serial.println("[Control Task] Password cleared in DB, resetting lastUnlockRequestTime");
+              lastUnlockRequestTime = 0;
+            }
+          }
+          
+          // Chỉ xử lý nếu password không rỗng và là request mới (tránh xử lý lại request cũ)
+          if (newPassword.length() > 0 && requestTime > lastUnlockRequestTime) {
+            // Trim whitespace từ password
+            newPassword.trim();
+            appPassword = newPassword;
+            lastUnlockRequestTime = requestTime;
+            Serial.print("[Control Task] Received unlock password from app: '");
+            Serial.print(appPassword);
+            Serial.print("' (length: ");
+            Serial.print(appPassword.length());
+            Serial.println(")");
+            
+            // Verify password và unlock nếu đúng
+            Serial.print("[Control Task] Comparing passwords - appPassword: '");
+            Serial.print(appPassword);
+            Serial.print("', stored password: '");
+            Serial.print(password);
+            Serial.print("' (length: ");
+            Serial.print(password.length());
+            Serial.println(")");
+            
+            if (appPassword == password) {
+              isUnlocked = true;
+              wrongCount = 0;
+              inputPassword = "";
+              doorServo.write(90);
+              Serial.println("[Control Task] Password correct! System unlocked from app.");
+              
+              // Force gửi trạng thái unlock lên DB ngay
+              forceUnlockStatusUpdate();
+              
+              // Clear unlock request và gửi thông báo success từ DB
+              HTTPClient clearHttp;
+              String clearUrl = String(apiBaseUrl) + "/api/rooms/" + roomId;
+              clearHttp.begin(clearUrl);
+              clearHttp.addHeader("Content-Type", "application/json");
+              DynamicJsonDocument clearDoc(256);
+              clearDoc["unlockPassword"] = "";
+              clearDoc["unlockRequestTime"] = 0;
+              clearDoc["unlockMessage"] = "success"; // Thông báo thành công
+              String clearJson;
+              serializeJson(clearDoc, clearJson);
+              int clearCode = clearHttp.PUT(clearJson);
+              clearHttp.end();
+              Serial.print("[Control Task] Cleared unlock request and sent success message, code: ");
+              Serial.println(clearCode);
+            } else {
+              Serial.println("[Control Task] Password incorrect from app.");
+              
+              // Gửi thông báo lỗi lên DB
+              HTTPClient errorHttp;
+              String errorUrl = String(apiBaseUrl) + "/api/rooms/" + roomId;
+              errorHttp.begin(errorUrl);
+              errorHttp.addHeader("Content-Type", "application/json");
+              DynamicJsonDocument errorDoc(256);
+              errorDoc["unlockMessage"] = "error"; // Thông báo lỗi
+              String errorJson;
+              serializeJson(errorDoc, errorJson);
+              int errorCode = errorHttp.PUT(errorJson);
+              errorHttp.end();
+              Serial.print("[Control Task] Sent error message to DB, code: ");
+              Serial.println(errorCode);
+            }
+          } else {
+            if (newPassword.length() == 0) {
+              Serial.println("[Control Task] Password is empty, skipping");
+            } else if (requestTime <= lastUnlockRequestTime) {
+              Serial.print("[Control Task] Request time not new (");
+              Serial.print(requestTime);
+              Serial.print(" <= ");
+              Serial.print(lastUnlockRequestTime);
+              Serial.println("), skipping");
+            }
+          }
+        } else {
+          Serial.println("[Control Task] No unlockPassword or unlockRequestTime in response");
+        }
         
         // Kiểm tra xem có control commands không
         // CHỈ set hasCommand nếu:
-        // 1. KHÔNG có bấm nút vật lý gần đây
-        // 2. VÀ không đang gửi HTTP (isSending = false)
-        // 3. VÀ đã qua ít nhất 12 giây kể từ lần gửi data cuối cùng (đủ thời gian HTTP request ~7s + app cập nhật ~5s)
+        // 1. ĐÃ MỞ KHÓA (isUnlocked = true)
+        // 2. KHÔNG có bấm nút vật lý gần đây
+        // 3. VÀ không đang gửi HTTP (isSending = false)
+        // 4. VÀ đã qua ít nhất 12 giây kể từ lần gửi data cuối cùng (đủ thời gian HTTP request ~7s + app cập nhật ~5s)
         unsigned long now = millis();
         bool recentlyPressedButton = (now - lastManualButtonPress) < MANUAL_BUTTON_PRIORITY_TIME;
         unsigned long timeSinceLastDataSent = (now - lastDataSentTime);
         bool dataJustSent = (lastDataSentTime > 0) && (timeSinceLastDataSent < 12000); // 12 giây
         
-        if (!recentlyPressedButton && !dataJustSent && !isSending && (doc.containsKey("heaterOn") || doc.containsKey("acOn") || doc.containsKey("fanLevel"))) {
+        if (isUnlocked && !recentlyPressedButton && !dataJustSent && !isSending && (doc.containsKey("heaterOn") || doc.containsKey("acOn") || doc.containsKey("fanLevel"))) {
           serverCommands.hasCommand = true;
           if (doc.containsKey("heaterOn")) {
             serverCommands.heaterOn = doc["heaterOn"];
@@ -779,5 +949,35 @@ void forceDataUpdate() {
     xSemaphoreGive(dataMutex);
     
     Serial.println("[FORCE] Data update triggered after button press");
+  }
+}
+
+// Force gửi trạng thái unlock lên DB ngay
+void forceUnlockStatusUpdate() {
+  if (apiTaskHandle == NULL || dataMutex == NULL || !wifiConnected || roomId == "") return;
+  
+  // Đọc data hiện tại
+  float currentTemp = dht.readTemperature();
+  if (isnan(currentTemp)) {
+    currentTemp = tempRoom;
+  }
+  int currentLight = analogRead(LDR_PIN);
+  bool pirMotion = digitalRead(PIR_PIN);
+  bool currentMotion = (currentLight > 2500) && pirMotion;
+  
+  // Force update sensorData với isUnlocked và set needUpdate = true
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    sensorData.tempRoom = currentTemp;
+    sensorData.hasMotion = currentMotion;
+    sensorData.lightLevel = currentLight;
+    sensorData.mode = digitalRead(SW_MODE);
+    sensorData.heaterOn = heaterOn;
+    sensorData.acOn = acOn;
+    sensorData.fanLevel = fanLevel;
+    sensorData.needUpdate = true;
+    xSemaphoreGive(dataMutex);
+    
+    Serial.print("[FORCE] Unlock status update triggered, isUnlocked=");
+    Serial.println(isUnlocked);
   }
 }
