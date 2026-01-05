@@ -13,8 +13,8 @@
 // ================== CẤU HÌNH CHÂN ==================
 #define DHTPIN 13
 #define DHTTYPE DHT22
-#define SDA_PIN 12 
-#define SCL_PIN 14 
+#define SDA_PIN 12
+#define SCL_PIN 14
 
 #define PIR_PIN 27
 #define LDR_PIN 34
@@ -30,15 +30,15 @@
 #define SERVO_PIN 21
 
 // ================== KEYPAD ==================
-const byte ROWS = 4; 
-const byte COLS = 4; 
+const byte ROWS = 4;
+const byte COLS = 4;
 
 char keys[ROWS][COLS] = {
   {'1','2','3','A'}, {'4','5','6','B'}, {'7','8','9','C'}, {'*','0','#','D'}
 };
 
-byte rowPins[ROWS] = {19, 18, 5, 17}; 
-byte colPins[COLS] = {16, 4, 2, 15}; 
+byte rowPins[ROWS] = {19, 18, 5, 17};
+byte colPins[COLS] = {16, 4, 2, 15};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
@@ -125,23 +125,23 @@ void setup() {
   Serial.begin(115200);
 
   Wire.begin(SDA_PIN, SCL_PIN); // Khởi tạo I2C cho LCD trên chân 12, 14
-  
+
   dht.begin();
   lcd.init();
   lcd.backlight();
-  
+
   pinMode(PIR_PIN, INPUT);
-  pinMode(LDR_PIN, INPUT); 
+  pinMode(LDR_PIN, INPUT);
   pinMode(SW_MODE, INPUT); 
   pinMode(BTN_AC, INPUT_PULLUP);
   pinMode(BTN_FAN, INPUT_PULLUP);
   pinMode(BTN_HEATER, INPUT_PULLUP);
-  
+
   pinMode(LED_PIR, OUTPUT);
   pinMode(LED_HEATER, OUTPUT);
   pinMode(LED_FAN, OUTPUT);
   pinMode(LED_AC, OUTPUT);
-  
+
   doorServo.attach(SERVO_PIN);
   doorServo.write(0); // Cửa đóng
   
@@ -208,7 +208,7 @@ void setup() {
       Serial.println("[SETUP] Reset lastUnlockRequestTime to 0");
     }
   }
-  
+
   lcd.setCursor(0, 0);
   lcd.print("NHAP MAT KHAU:");
 }
@@ -261,8 +261,8 @@ void loop() {
       if (currentMotion && !lastSentMotion) {
         Serial.println("[LOOP] Motion detected (false -> true), sending push notification...");
         sendMotionNotification(); // Gọi ngay, không đợi hasSignificantChange
-      }
-      
+}
+
       // Đọc mode TRỰC TIẾP từ switch
       bool currentMode = digitalRead(SW_MODE);
       
@@ -371,39 +371,39 @@ void loop() {
 void handleSecurity() {
   char key = keypad.getKey();
   if (key) {
-    if (key == '#') {
-      if (inputPassword == password) {
-        isUnlocked = true;
-        doorServo.write(90);
-        lcd.clear();
-        lcd.print("DOOR OPENED!");
+  if (key == '#') {
+    if (inputPassword == password) {
+      isUnlocked = true;
+      doorServo.write(90);
+      lcd.clear();
+      lcd.print("DOOR OPENED!");
         Serial.println("Log: Mat khau dung. He thong kich hoat.");
         
         // Force gửi trạng thái unlock lên DB ngay
         forceUnlockStatusUpdate();
         
-        delay(1500);
-        tempRoom = dht.readTemperature();
-      } else {
-        wrongCount++;
-        inputPassword = "";
-        lcd.clear();
-        if (wrongCount >= 3) {
-          Serial.println("Log: Sai 3 lan. Canh bao RED. Khoa 10p.");
-          lockUntil = millis() + 600000; 
-        } else {
-          Serial.println("Log: Sai pass. Canh bao YELLOW. Khoa 30s.");
-          lockUntil = millis() + 30000;
-        }
-      }
-    } else if (key == '*') {
-      inputPassword = "";
-      lcd.setCursor(0, 1);
-      lcd.print("                ");
+      delay(1500);
+      tempRoom = dht.readTemperature();
     } else {
-      inputPassword += key;
-      lcd.setCursor(0, 1);
-      lcd.print(inputPassword);
+      wrongCount++;
+      inputPassword = "";
+      lcd.clear();
+      if (wrongCount >= 3) {
+          Serial.println("Log: Sai 3 lan. Canh bao RED. Khoa 10p.");
+        lockUntil = millis() + 600000;
+      } else {
+          Serial.println("Log: Sai pass. Canh bao YELLOW. Khoa 30s.");
+        lockUntil = millis() + 30000;
+      }
+    }
+    } else if (key == '*') {
+    inputPassword = "";
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
+    } else {
+    inputPassword += key;
+    lcd.setCursor(0, 1);
+    lcd.print(inputPassword);
     }
   }
 }
@@ -412,7 +412,7 @@ void handleSecurity() {
 void handleSmartHome() {
   // Đọc mode từ switch vật lý (mặc định)
   bool switchMode = digitalRead(SW_MODE);
-  
+
   // Chỉ cập nhật autoMode từ switch vật lý nếu switch thay đổi
   // (không ghi đè mode từ app)
   if (switchMode != lastAutoMode) {
@@ -421,7 +421,7 @@ void handleSmartHome() {
       // Từ auto -> manual: reset devices
       heaterOn = false; acOn = false; fanLevel = 0;
       Serial.println("[Switch] Mode changed to MANUAL - Devices Reset");
-    }
+  }
     autoMode = switchMode; // Cập nhật autoMode khi switch vật lý thay đổi
     Serial.print("[Switch] Mode changed to: ");
     Serial.println(autoMode ? "AUTO" : "MANUAL");
@@ -518,7 +518,7 @@ void handleSmartHome() {
   // autoMode đã được cập nhật từ switch vật lý ở đầu hàm (khi switch thay đổi)
   // hoặc từ app (khi có command từ app)
   // Điều này đảm bảo mode từ app không bị ghi đè
-  
+
   if (autoMode) {
     // Logic tự động local
     if (tempRoom >= 28) {
@@ -537,7 +537,7 @@ void handleSmartHome() {
     // Manual mode - chỉ dùng nút vật lý
     // LED đã được set trong handleManualButtons() để phản hồi ngay
     handleManualButtons();
-  } 
+  }
 
   lcd.setCursor(0, 0);
   lcd.print(autoMode ? "AUTO  " : "MANUAL");
