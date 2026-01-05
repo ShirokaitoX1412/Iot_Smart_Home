@@ -107,21 +107,61 @@ float readGasSensor() {
   // Chuyển đổi sang voltage (0-3.3V)
   float voltage = (rawValue / 4095.0) * 3.3;
   
-  // Cảm biến "Flying Fish" - công thức chuyển đổi
-  // Nếu cảm biến trả về trực tiếp giá trị ppm qua ADC:
-  // ppm = rawValue; // Hoặc rawValue * hệ số
+  // DEBUG: Log raw values để kiểm tra
+  static unsigned long lastDebugTime = 0;
+  static int debugCount = 0;
+  if (millis() - lastDebugTime > 2000) { // Log mỗi 2 giây
+    Serial.print("[DEBUG] Raw ADC: ");
+    Serial.print(rawValue);
+    Serial.print(" / Voltage: ");
+    Serial.print(voltage, 3);
+    Serial.print("V");
+    Serial.println();
+    lastDebugTime = millis();
+    debugCount++;
+  }
   
-  // Hoặc nếu cần chuyển từ voltage sang ppm:
-  // Với MQ-2/MQ-5 tương tự: dùng công thức logarit
-  // R = (3.3 - voltage) * RL / voltage  (RL = load resistor, thường 10kΩ)
-  // ppm = pow(10, ((log10(R/R0) - b) / m))  (R0, b, m từ datasheet)
+  // CẢM BIẾN GAS THƯỜNG HOẠT ĐỘNG THEO 2 CÁCH:
+  // 1. Voltage tăng khi có gas (cảm biến tăng điện trở)
+  // 2. Voltage giảm khi có gas (cảm biến giảm điện trở)
   
-  // Công thức đơn giản cho cảm biến analog (cần hiệu chỉnh):
-  // Giả sử: 0V = 0 ppm, 3.3V = 1000 ppm
-  float ppm = (voltage / 3.3) * 1000.0;
+  // THỬ CÔNG THỨC 1: Giả sử cảm biến tăng voltage khi có gas
+  // Với cảm biến MQ-2/MQ-5: R = (Vcc - Vout) * RL / Vout
+  // ppm = f(R/R0) - công thức logarit phức tạp
   
-  // Hoặc nếu cảm biến đã có công thức riêng, dùng rawValue trực tiếp:
-  // float ppm = rawValue; // Nếu cảm biến đã scale sẵn
+  // CÔNG THỨC ĐƠN GIẢN CHO TEST:
+  // Giả sử: rawValue 0-4095 tương ứng 0-1000 ppm
+  // Hoặc: voltage 0-3.3V tương ứng 0-1000 ppm
+  
+  // THỬ 1: Dùng rawValue trực tiếp (scale)
+  float ppm1 = (rawValue / 4095.0) * 1000.0;
+  
+  // THỬ 2: Dùng voltage (nếu cảm biến output voltage tỷ lệ với gas)
+  float ppm2 = (voltage / 3.3) * 1000.0;
+  
+  // THỬ 3: Cảm biến phản ứng ngược (voltage giảm khi có gas)
+  // Giả sử: 3.3V = 0 ppm, 0V = 1000 ppm
+  float ppm3 = ((3.3 - voltage) / 3.3) * 1000.0;
+  
+  // THỬ 4: Dùng rawValue với offset (nếu cảm biến có baseline)
+  // Giả sử baseline là 2000 (khi không có gas)
+  float baseline = 2000.0;
+  float ppm4 = max(0.0, (rawValue - baseline) * 0.5); // Scale factor tùy chỉnh
+  
+  // CÔNG THỨC ĐÚNG: Dựa vào log, rawValue thấp (46-287) = không có gas
+  // Khi có gas, rawValue sẽ TĂNG (cảm biến MQ thường tăng điện trở khi có gas)
+  // Baseline: Giả sử khi không có gas, rawValue ~ 150-200
+  // Khi có gas, rawValue tăng lên 300-1000+
+  float baselineRaw = 150.0; // Giá trị khi không có gas (từ log: 46-287, trung bình ~150)
+  float maxRaw = 1000.0; // Giá trị tối đa khi có nhiều gas
+  float ppm5 = max(0.0, ((rawValue - baselineRaw) / (maxRaw - baselineRaw)) * 1000.0);
+  
+  // CHỌN CÔNG THỨC PHÙ HỢP
+  // Dùng ppm5: Tính từ rawValue với baseline
+  float ppm = ppm5;
+  
+  // Đảm bảo ppm không âm
+  if (ppm < 0) ppm = 0;
   
   return ppm;
 }
@@ -178,13 +218,21 @@ void sendGasAlertNotification(float gasLevel) {
   String jsonString;
   serializeJson(doc, jsonString);
   
+  Serial.print("[NOTIFY] Sending gas alert notification... Level: ");
+  Serial.println(gasLevel);
+  
   int httpCode = http.POST(jsonString);
   
-  if (httpCode == HTTP_CODE_OK) {
-    Serial.println("[NOTIFY] Gas alert notification sent");
+  if (httpCode == HTTP_CODE_OK || httpCode == 200) {
+    Serial.println("[NOTIFY] ✓ Gas alert notification sent successfully");
   } else {
-    Serial.print("[NOTIFY] Failed to send alert, code: ");
+    Serial.print("[NOTIFY] ✗ Failed to send alert, code: ");
     Serial.println(httpCode);
+    if (httpCode > 0) {
+      String response = http.getString();
+      Serial.print("[NOTIFY] Response: ");
+      Serial.println(response);
+    }
   }
   
   http.end();
@@ -265,12 +313,19 @@ void loop() {
     lastSendTime = now;
   }
   
-  // Log giá trị (mỗi giây)
+  // Log giá trị (mỗi giây) với thông tin chi tiết
   static unsigned long lastLogTime = 0;
   if (now - lastLogTime >= 1000) {
-    Serial.print("[GAS] Level: ");
-    Serial.print(gasLevel);
-    Serial.print(" ppm, Alert: ");
+    int rawValue = analogRead(GAS_SENSOR_PIN);
+    float voltage = (rawValue / 4095.0) * 3.3;
+    
+    Serial.print("[GAS] Raw: ");
+    Serial.print(rawValue);
+    Serial.print(" | Voltage: ");
+    Serial.print(voltage, 2);
+    Serial.print("V | Level: ");
+    Serial.print(gasLevel, 1);
+    Serial.print(" ppm | Alert: ");
     Serial.println(gasAlert ? "YES" : "NO");
     lastLogTime = now;
   }
