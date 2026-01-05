@@ -201,6 +201,42 @@ void sendGasData(float gasLevel, bool gasAlert) {
   http.end();
 }
 
+// ================== HÀM LƯU GAS ALERT LOG ==================
+void saveGasAlertLog(float gasLevel) {
+  if (roomId == "") return;
+  
+  HTTPClient http;
+  String url = String(apiBaseUrl) + "/api/rooms/" + roomId + "/gas-alerts";
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(3000);
+  
+  DynamicJsonDocument doc(128);
+  doc["gasLevel"] = gasLevel;
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  Serial.print("[LOG] Saving gas alert log... Level: ");
+  Serial.println(gasLevel);
+  
+  int httpCode = http.POST(jsonString);
+  
+  if (httpCode == HTTP_CODE_OK || httpCode == 200) {
+    Serial.println("[LOG] ✓ Gas alert log saved successfully");
+  } else {
+    Serial.print("[LOG] ✗ Failed to save log, code: ");
+    Serial.println(httpCode);
+    if (httpCode > 0) {
+      String response = http.getString();
+      Serial.print("[LOG] Response: ");
+      Serial.println(response);
+    }
+  }
+  
+  http.end();
+}
+
 // ================== HÀM GỬI PUSH NOTIFICATION KHI CÓ CẢNH BÁO ==================
 void sendGasAlertNotification(float gasLevel) {
   if (roomId == "") return;
@@ -285,7 +321,7 @@ void loop() {
   // Điều khiển LED cảnh báo
   digitalWrite(LED_ALERT_PIN, gasAlert ? HIGH : LOW);
   
-  // Kiểm tra cảnh báo mới (chỉ gửi notification khi chuyển từ false -> true)
+  // Kiểm tra cảnh báo mới (chỉ gửi notification và log khi chuyển từ false -> true)
   if (now - lastAlertCheckTime >= ALERT_CHECK_INTERVAL) {
     if (gasAlert && !lastGasAlert) {
       Serial.print("[ALERT] Gas level exceeded threshold! Level: ");
@@ -293,6 +329,9 @@ void loop() {
       Serial.print(" ppm (threshold: ");
       Serial.print(GAS_THRESHOLD);
       Serial.println(" ppm)");
+      
+      // Lưu log gas alert
+      saveGasAlertLog(gasLevel);
       
       // Gửi push notification ngay lập tức
       sendGasAlertNotification(gasLevel);
