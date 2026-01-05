@@ -11,14 +11,14 @@
 
 /* ================= GPIO ================= */
 #define PIR_PIN          4
-#define SWITCH_MODE     18 
-#define BTN_HEATER       5 
-#define LED_PIR         17 
-#define LED_HEATER      19 
-#define LED_WARNING      2 
-#define LED_WATER_HEATER 16 
+#define SWITCH_MODE     18
+#define BTN_HEATER       5
+#define LED_PIR         17
+#define LED_HEATER      19
+#define LED_WARNING      2
+#define LED_WATER_HEATER 16
 #define SERVO_PIN       14
-#define DHT_PIN         15 
+#define DHT_PIN         15
 
 #define DHTTYPE DHT22
 DHT dht(DHT_PIN, DHTTYPE);
@@ -35,7 +35,7 @@ char keys[ROWS][COLS] = {
   {'7','8','9','C'}, {'*','0','#','D'}
 };
 
-byte rowPins[ROWS] = {32, 33, 25, 26}; 
+byte rowPins[ROWS] = {32, 33, 25, 26};
 byte colPins[COLS] = {27, 12, 13, 23};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
@@ -91,9 +91,9 @@ bool isUnlocked = false; // Đổi từ isAuthenticated sang isUnlocked để đ
 unsigned long lockUntil = 0;
 int wrongCount = 0;
 
-float roomTemp = 0; 
-float waterTemp = 40.0; 
-int currentHour = 19; 
+float roomTemp = 0;
+float waterTemp = 40.0;
+int currentHour = 19;
 
 bool lastWaterState = false;
 bool lastHeaterState = false;
@@ -120,7 +120,7 @@ void sendMotionNotification(); // Gửi push notification khi phát hiện motio
 
 void setup() {
   Serial.begin(115200);
-  dht.begin(); 
+  dht.begin();
   pinMode(PIR_PIN, INPUT);
   pinMode(SWITCH_MODE, INPUT_PULLUP);
   pinMode(BTN_HEATER, INPUT_PULLUP);
@@ -212,7 +212,7 @@ void loop() {
 
   // 2. Nếu chưa mở khóa: Chỉ chạy Keypad, KHÔNG cho phép điều khiển từ app
   if (!isUnlocked) {
-    handleKeypad();
+  handleKeypad();
     showLockedScreen();
     return;
   }
@@ -307,7 +307,7 @@ void loop() {
       waterTemp -= 0.05;
     }
   }
-  
+
   updateLCD();
   
   // Cập nhật sensor data để API task gửi (không block)
@@ -324,8 +324,8 @@ void loop() {
     float currentRoomTemp = dht.readTemperature();
     if (isnan(currentRoomTemp)) {
       currentRoomTemp = roomTemp;
-    }
-    
+}
+
     // Đọc motion TRỰC TIẾP từ sensor
     bool currentMotion = digitalRead(PIR_PIN);
     
@@ -427,7 +427,7 @@ void loop() {
 
 /* ============ LOGIC AUTO: SỬA LỖI TẮT Ở 27 ĐỘ ============ */
 void autoModeLogic(bool hasPerson) {
-  bool shouldHeat = lastHeaterState; 
+  bool shouldHeat = lastHeaterState;
   String reason = "";
 
   // Logic tự động local
@@ -458,7 +458,7 @@ void autoModeLogic(bool hasPerson) {
     if (shouldHeat) Serial.println(reason);
     else Serial.println("TAT (DA DAT 27C HOAC VANG NGUOI)");
     lastHeaterState = shouldHeat;
-    manualHeaterToggle = shouldHeat; 
+    manualHeaterToggle = shouldHeat;
   }
 }
 
@@ -467,7 +467,7 @@ void manualMode() {
   static unsigned long lastPress = 0;
   unsigned long now = millis();
   bool currentBtnState = digitalRead(BTN_HEATER);
-  
+
   // Debounce ngắn hơn và áp dụng ngay
   if (currentBtnState == LOW && lastBtnState == HIGH && now - lastPress > 50) {
     Serial.println("[BUTTON] HEATER pressed - START");
@@ -515,9 +515,9 @@ void handleKeypad() {
       isUnlocked = true; 
       wrongCount = 0;
       inputPassword = "";
-      doorServo.write(90); 
+      doorServo.write(90);
       digitalWrite(LED_WARNING, LOW); // Tắt đèn cảnh báo nếu trước đó có sai
-      lcd.clear(); 
+      lcd.clear();
       lcd.print("DOOR OPENED!");
       Serial.println("Log: Mat khau dung. He thong kich hoat.");
       
@@ -529,12 +529,12 @@ void handleKeypad() {
     else { 
       inputPassword = ""; 
       wrongCount++;
-      lcd.clear(); 
-      lcd.print("WRONG PASS"); 
+      lcd.clear();
+      lcd.print("WRONG PASS");
       
       // BẬT ĐÈN CẢNH BÁO
-      digitalWrite(LED_WARNING, HIGH); 
-      delay(1000); 
+      digitalWrite(LED_WARNING, HIGH);
+      delay(1000);
       digitalWrite(LED_WARNING, LOW); // Tắt đèn để chuẩn bị nhập lại
       lcd.clear();
       
@@ -543,8 +543,8 @@ void handleKeypad() {
         lockUntil = millis() + 30000; // Khóa 30 giây
         wrongCount = 0;
         Serial.println("Log: Nhap sai qua 3 lan. He thong bi khoa 30s.");
-      }
     }
+  }
   } else if (key == '*') { 
     inputPassword = ""; 
     digitalWrite(LED_WARNING, LOW);

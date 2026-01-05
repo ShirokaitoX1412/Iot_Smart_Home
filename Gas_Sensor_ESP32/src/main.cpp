@@ -13,7 +13,7 @@ const char* apiBaseUrl = "https://iot-smart-home-app.vercel.app"; // Hoặc URL 
 String roomId = ""; // Sẽ được lấy từ database dựa trên tên phòng
 
 // ================== CẤU HÌNH CẢM BIẾN GAS ==================
-const float GAS_THRESHOLD = 300.0; // Ngưỡng cảnh báo (ppm) - điều chỉnh theo cảm biến của bạn
+const float GAS_THRESHOLD = 150.0; // Ngưỡng cảnh báo (ppm) - Điều chỉnh theo cảm biến của bạn
 const unsigned long SEND_INTERVAL = 5000; // Gửi data mỗi 5 giây
 const unsigned long ALERT_CHECK_INTERVAL = 1000; // Kiểm tra cảnh báo mỗi 1 giây
 
@@ -47,26 +47,51 @@ void connectWiFi() {
 // ================== HÀM LẤY ROOM ID ==================
 String getRoomIdByName() {
   HTTPClient http;
-  String url = String(apiBaseUrl) + "/api/rooms?name=Phòng Ngủ"; // Thay đổi tên phòng nếu cần
+  String url = String(apiBaseUrl) + "/api/rooms"; // Lấy tất cả rooms
   http.begin(url);
-  http.setTimeout(5000);
+  http.setTimeout(10000);
   
   int httpCode = http.GET();
   String result = "";
   
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, payload);
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, payload);
     
-    if (doc.is<JsonArray>() && doc.size() > 0) {
-      result = doc[0]["_id"].as<String>();
-      Serial.print("Room ID: ");
-      Serial.println(result);
+    if (error) {
+      Serial.print("JSON parse error: ");
+      Serial.println(error.c_str());
+    } else if (doc.is<JsonArray>()) {
+      JsonArray rooms = doc.as<JsonArray>();
+      
+      // Tìm room có type = "bedroom" hoặc name = "Phòng Ngủ"
+      for (JsonObject room : rooms) {
+        String type = room["type"].as<String>();
+        String name = room["name"].as<String>();
+        
+        if (type == "bedroom" || name == "Phòng Ngủ") {
+          result = room["_id"].as<String>();
+          Serial.print("Room ID found: ");
+          Serial.println(result);
+          Serial.print("Room name: ");
+          Serial.println(name);
+          break;
+        }
+      }
+      
+      if (result == "") {
+        Serial.println("Room 'Phòng Ngủ' (bedroom) not found in database");
+      }
     }
   } else {
     Serial.print("Failed to get room ID, code: ");
     Serial.println(httpCode);
+    if (httpCode > 0) {
+      String errorPayload = http.getString();
+      Serial.print("Error response: ");
+      Serial.println(errorPayload);
+    }
   }
   
   http.end();
