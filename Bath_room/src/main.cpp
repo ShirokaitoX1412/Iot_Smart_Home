@@ -318,7 +318,7 @@ void loop() {
     static bool lastSentHeater = false;
     static bool lastSentWaterHeater = false;
     static bool lastSentMotion = false;
-    static bool lastSentMode = false;
+    static bool lastSentMode = -1; // Khởi tạo = -1 để force gửi lần đầu
     
     // Đọc nhiệt độ TRỰC TIẾP từ DHT
     float currentRoomTemp = dht.readTemperature();
@@ -329,17 +329,38 @@ void loop() {
     // Đọc motion TRỰC TIẾP từ sensor
     bool currentMotion = digitalRead(PIR_PIN);
     
-    // Đọc mode TRỰC TIẾP từ switch (giống bedroom để đồng bộ với phần cứng)
-    bool currentMode = (digitalRead(SWITCH_MODE) == HIGH); // HIGH = auto (true), LOW = manual (false)
+    // KIỂM TRA MOTION TRƯỚC - gửi notification ngay khi phát hiện motion mới (không phụ thuộc vào hasSignificantChange)
+    if (currentMotion && !lastSentMotion) {
+      Serial.println("[LOOP] Motion detected (false -> true), sending push notification...");
+      sendMotionNotification(); // Gọi ngay, không đợi hasSignificantChange
+    }
+    
+    // Đọc mode từ switch vật lý để so sánh (nhưng sẽ gửi autoMode lên DB - giá trị thực tế)
+    // Với INPUT_PULLUP: LOW = switch ON (nối GND), HIGH = switch OFF (không nối)
+    // Logic: HIGH (switch OFF) = auto, LOW (switch ON) = manual
+    bool switchMode = (digitalRead(SWITCH_MODE) == HIGH); // HIGH = auto (true), LOW = manual (false)
     
     // Kiểm tra xem có thay đổi đáng kể không
+    // Dùng autoMode (giá trị thực tế) để so sánh, không phải switchMode
+    bool motionChanged = (currentMotion != lastSentMotion);
     bool hasSignificantChange = 
       (abs(currentRoomTemp - lastSentRoomTemp) > 0.5) ||  // Nhiệt độ phòng thay đổi > 0.5°C
       (abs(waterTemp - lastSentWaterTemp) > 0.5) ||        // Nhiệt độ nước thay đổi > 0.5°C
       (lastHeaterState != lastSentHeater) ||               // Heater thay đổi
       (lastWaterState != lastSentWaterHeater) ||           // Water heater thay đổi
-      (currentMotion != lastSentMotion) ||                 // Motion thay đổi
-      (currentMode != lastSentMode);                       // Mode thay đổi (đọc từ switch)
+      motionChanged ||                                      // Motion thay đổi
+      (lastSentMode == -1 || autoMode != lastSentMode);    // Mode thay đổi (dùng autoMode - giá trị thực tế) hoặc lần đầu
+    
+    // Debug log khi motion thay đổi
+    if (motionChanged) {
+      Serial.print("[LOOP] Motion change detected: ");
+      Serial.print(lastSentMotion ? "YES" : "NO");
+      Serial.print(" -> ");
+      Serial.print(currentMotion ? "YES" : "NO");
+      Serial.print(" (hasSignificantChange: ");
+      Serial.print(hasSignificantChange);
+      Serial.println(")");
+    }
     
     // Dùng mutex để đồng bộ truy cập sensorData (tránh race condition)
     if (hasSignificantChange && dataMutex != NULL) {
@@ -350,33 +371,51 @@ void loop() {
           sensorData.roomTemp = currentRoomTemp;
           sensorData.waterTemp = waterTemp;
           sensorData.hasMotion = currentMotion;
-          sensorData.mode = currentMode; // Dùng currentMode đã đọc từ switch (giống bedroom)
+          sensorData.mode = autoMode; // Dùng autoMode (giá trị thực tế, có thể từ app hoặc switch)
           sensorData.heaterOn = lastHeaterState;
           sensorData.waterHeaterOn = lastWaterState;
           
           // Đánh dấu cần update SAU khi đã cập nhật data
           sensorData.needUpdate = true;
           
+          // Log motion change để debug
+          if (currentMotion != lastSentMotion) {
+            Serial.print("[LOOP] Motion changed: ");
+            Serial.print(lastSentMotion ? "YES" : "NO");
+            Serial.print(" -> ");
+            Serial.println(currentMotion ? "YES" : "NO");
+            // Note: sendMotionNotification() đã được gọi ở trên (trước khi vào block này)
+          }
+          
+          // Log mode change để debug
+          if (lastSentMode == -1 || autoMode != lastSentMode) {
+            Serial.print("[LOOP] Mode changed: ");
+            if (lastSentMode == -1) {
+              Serial.print("INIT");
+            } else {
+              Serial.print(lastSentMode ? "AUTO" : "MANUAL");
+            }
+            Serial.print(" -> ");
+            Serial.print(autoMode ? "AUTO" : "MANUAL");
+            Serial.print(" (switchMode: ");
+            Serial.print(switchMode ? "AUTO" : "MANUAL");
+            Serial.println(")");
+          }
+          
           // Lưu giá trị đã gửi SAU KHI set needUpdate
           lastSentRoomTemp = currentRoomTemp;
           lastSentWaterTemp = waterTemp;
           lastSentHeater = lastHeaterState;
           lastSentWaterHeater = lastWaterState;
-          
-          // Nếu phát hiện motion mới (từ false -> true), gửi push notification
-          if (currentMotion && !lastSentMotion) {
-            sendMotionNotification();
-          }
-          
-          lastSentMotion = currentMotion;
-          lastSentMode = currentMode; // Lưu giá trị từ switch
+          lastSentMotion = currentMotion; // Cập nhật motion TRƯỚC khi lưu mode
+          lastSentMode = autoMode; // Lưu autoMode (giá trị thực tế) để so sánh lần sau
         } else {
           // apiTask() đang xử lý, nhưng có thay đổi đáng kể
           // Chỉ cập nhật data (không set needUpdate) để apiTask() đọc được giá trị mới nhất
           sensorData.roomTemp = currentRoomTemp;
           sensorData.waterTemp = waterTemp;
           sensorData.hasMotion = currentMotion;
-          sensorData.mode = currentMode; // Dùng currentMode đã đọc từ switch (giống bedroom)
+          sensorData.mode = autoMode; // Dùng autoMode (giá trị thực tế, có thể từ app hoặc switch)
           sensorData.heaterOn = lastHeaterState;
           sensorData.waterHeaterOn = lastWaterState;
         }
@@ -635,10 +674,17 @@ void apiTask(void *pvParameters) {
           doc["roomTemp"] = roomTemp;
           doc["waterTemp"] = waterTemp;
           doc["hasMotion"] = motion;
-          doc["mode"] = mode ? "auto" : "manual";
+          doc["mode"] = mode ? "auto" : "manual"; // mode từ sensorData (autoMode)
           doc["heaterOn"] = heater;
           doc["waterHeaterOn"] = waterHeater;
           doc["isUnlocked"] = isUnlocked; // Gửi trạng thái unlock lên DB
+          
+          // Debug log để kiểm tra mode được gửi
+          Serial.print("[API Task] Sending mode: ");
+          Serial.print(mode ? "auto" : "manual");
+          Serial.print(" (mode value=");
+          Serial.print(mode);
+          Serial.println(")");
           
           String jsonString;
           serializeJson(doc, jsonString);
@@ -898,14 +944,13 @@ void forceDataUpdate() {
     currentRoomTemp = roomTemp;
   }
   bool currentMotion = digitalRead(PIR_PIN);
-  bool currentMode = (digitalRead(SWITCH_MODE) == HIGH); // Đọc từ switch
   
   // Force update sensorData và set needUpdate = true
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     sensorData.roomTemp = currentRoomTemp;
     sensorData.waterTemp = waterTemp;
     sensorData.hasMotion = currentMotion;
-    sensorData.mode = currentMode; // Dùng giá trị từ switch
+    sensorData.mode = autoMode; // Dùng autoMode (giá trị thực tế)
     sensorData.heaterOn = lastHeaterState;
     sensorData.waterHeaterOn = lastWaterState;
     sensorData.needUpdate = true;
@@ -948,14 +993,13 @@ void forceUnlockStatusUpdate() {
     currentRoomTemp = roomTemp;
   }
   bool currentMotion = digitalRead(PIR_PIN);
-  bool currentMode = (digitalRead(SWITCH_MODE) == HIGH); // Đọc từ switch
   
   // Force update sensorData với isUnlocked và set needUpdate = true
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
     sensorData.roomTemp = currentRoomTemp;
     sensorData.waterTemp = waterTemp;
     sensorData.hasMotion = currentMotion;
-    sensorData.mode = currentMode; // Dùng giá trị từ switch
+    sensorData.mode = autoMode; // Dùng autoMode (giá trị thực tế)
     sensorData.heaterOn = lastHeaterState;
     sensorData.waterHeaterOn = lastWaterState;
     sensorData.needUpdate = true;

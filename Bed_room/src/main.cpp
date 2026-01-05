@@ -257,6 +257,12 @@ void loop() {
       // Giống logic bật LED: chỉ bật LED khi trời tối và có motion
       bool currentMotion = (currentLight > 2500) && pirMotion;
       
+      // KIỂM TRA MOTION TRƯỚC - gửi notification ngay khi phát hiện motion mới (không phụ thuộc vào hasSignificantChange)
+      if (currentMotion && !lastSentMotion) {
+        Serial.println("[LOOP] Motion detected (false -> true), sending push notification...");
+        sendMotionNotification(); // Gọi ngay, không đợi hasSignificantChange
+      }
+      
       // Đọc mode TRỰC TIẾP từ switch
       bool currentMode = digitalRead(SW_MODE);
       
@@ -316,11 +322,7 @@ void loop() {
             if (currentMotion != lastSentMotion) {
               Serial.print("Motion:"); Serial.print(currentMotion ? "YES" : "NO"); Serial.print(" ");
               hasAnyChange = true;
-              
-              // Nếu phát hiện motion mới (từ false -> true), gửi push notification
-              if (currentMotion && !lastSentMotion) {
-                sendMotionNotification();
-              }
+              // Note: sendMotionNotification() đã được gọi ở trên (trước khi vào block này)
             }
             if (currentMode != lastSentMode) {
               Serial.print("Mode:"); Serial.print(currentMode ? "AUTO" : "MANUAL"); Serial.print(" ");
@@ -1027,4 +1029,27 @@ void forceUnlockStatusUpdate() {
     Serial.print("[FORCE] Unlock status update triggered, isUnlocked=");
     Serial.println(isUnlocked);
   }
+}
+
+// Gửi push notification khi phát hiện motion
+void sendMotionNotification() {
+  if (!wifiConnected || roomId == "") return;
+  
+  HTTPClient http;
+  String url = String(apiBaseUrl) + "/api/rooms/" + roomId + "/notify";
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(3000);
+  http.setConnectTimeout(2000);
+  
+  int httpCode = http.POST("{}"); // Empty body
+  
+  if (httpCode == HTTP_CODE_OK) {
+    Serial.println("[NOTIFY] Push notification sent");
+  } else {
+    Serial.print("[NOTIFY] Failed to send notification, code: ");
+    Serial.println(httpCode);
+  }
+  
+  http.end();
 }
