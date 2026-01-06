@@ -4,6 +4,9 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 // ================== CẤU HÌNH CHÂN ==================
 #define DHTPIN 13
@@ -31,6 +34,50 @@
 #define BTN_FAN 23         // Button 2 - Quạt
 #define BTN_HEATER 22      // Button 3 - Lò sưởi
 
+// ================== CẤU HÌNH WIFI & API ==================
+// Nếu chạy trên Wokwi: dùng WiFi ảo "Wokwi-GUEST" (không mật khẩu)
+// Nếu chạy trên ESP32 thật: đổi ssid/password thành WiFi nhà anh
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+const char* apiBaseUrl = "https://iot-smart-home-app.vercel.app";
+String roomId = "";
+bool wifiConnected = false;
+
+// Biến global để share data với API task
+struct SensorData {
+  float tempRoom;
+  bool hasMotion;
+  int lightLevel;
+  bool mode; // true = auto, false = manual
+  bool heaterOn;
+  bool acOn;
+  int fanLevel;
+  bool needUpdate;
+};
+
+SensorData sensorData = {0, false, 0, false, false, false, 0, false};
+TaskHandle_t apiTaskHandle = NULL;
+
+// Biến để nhận control commands từ app
+struct ControlCommands {
+  bool hasCommand;
+  bool heaterOn;
+  bool acOn;
+  int fanLevel;
+  bool mode; // true = auto, false = manual
+};
+
+ControlCommands serverCommands = {false, false, false, 0, false};
+TaskHandle_t controlTaskHandle = NULL;
+unsigned long lastManualButtonPress = 0;
+const unsigned long MANUAL_BUTTON_PRIORITY_TIME = 20000; // 20 giây
+unsigned long lastDataSentTime = 0;
+
+// Biến để track thời gian gửi cuối cùng
+unsigned long lastApiUpdate = 0;
+volatile bool isSending = false;
+SemaphoreHandle_t dataMutex = NULL;
+
 // ================== ĐỐI TƯỢNG & BIẾN ==================
 DHT dht(DHTPIN, DHTTYPE);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -41,27 +88,13 @@ bool heaterOn = false;
 bool acOn = false;
 bool humidifierOn = false;
 int fanLevel = 0; // 0, 1, 2, 3
+bool autoMode = true; // Mode hiện tại (true = auto, false = manual)
 bool lastAutoMode = true;
 
 int dustLevel = 0;     // Giá trị từ 0-4095
 String dustStatus = ""; // TOT, TRUNG BINH, KEM, XAU
 
 int luxValue = 0;      // Giá trị ánh sáng
-
-// ================== WIFI & API ==================
-const char* ssid = "Le Dinh Tuan T2";
-const char* password = "11221122";
-const char* apiBaseUrl = "https://iot-smart-home-app.vercel.app";
-String roomId = "";
-bool wifiConnected = false;
-
-// Đồng bộ định kỳ với server (gửi sensor data + nhận lệnh điều khiển)
-unsigned long lastSyncTime = 0;
-const unsigned long SYNC_INTERVAL = 2000; // ms
-
-// Ưu tiên nút vật lý sau khi bấm
-unsigned long lastManualButtonPress = 0;
-const unsigned long MANUAL_BUTTON_PRIORITY_TIME = 20000; // 20 giây
 
 // ================== FUNCTION PROTOTYPES ==================
 void handleDustSensor();
@@ -70,9 +103,9 @@ void handleSmartHome();
 void handleManualButtons();
 void connectWiFi();
 String getRoomIdByName();
-void syncWithServer();
-void sendSensorData();
-void fetchControlCommands();
+void apiTask(void *pvParameters);
+void controlTask(void *pvParameters);
+void forceDataUpdate();
 
 // ================== SETUP ==================
 void setup() {
@@ -112,7 +145,7 @@ void setup() {
   humidity = dht.readHumidity();
   Serial.println("Log: He thong khoi dong thanh cong.");
 
-  // Kết nối WiFi và lấy roomId của Phòng Khách
+  // Kết nối WiFi và lấy roomId
   connectWiFi();
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
@@ -120,6 +153,34 @@ void setup() {
     if (roomId != "") {
       Serial.print("Room ID (Phòng Khách) found: ");
       Serial.println(roomId);
+      
+      // Tạo mutex để đồng bộ truy cập sensorData
+      dataMutex = xSemaphoreCreateMutex();
+      if (dataMutex == NULL) {
+        Serial.println("Failed to create mutex!");
+      }
+      
+      // Tạo FreeRTOS task để gửi API trong background
+      xTaskCreate(
+        apiTask,
+        "API_Task",
+        8192,
+        NULL,
+        1,
+        &apiTaskHandle
+      );
+      
+      // Tạo FreeRTOS task để fetch control commands
+      xTaskCreate(
+        controlTask,
+        "Control_Task",
+        8192,
+        NULL,
+        1,
+        &controlTaskHandle
+      );
+      
+      Serial.println("[SETUP] FreeRTOS tasks created");
     } else {
       Serial.println("Khong tim thay room 'Phòng Khách' trong database");
     }
@@ -133,11 +194,77 @@ void loop() {
   handleDustSensor();
   handleCurtainControl();
   handleSmartHome();
-
-  // Đồng bộ với server định kỳ (không gọi quá nhiều)
-  if (wifiConnected && roomId != "" && millis() - lastSyncTime >= SYNC_INTERVAL) {
-    lastSyncTime = millis();
-    syncWithServer();
+  
+  // Cập nhật sensor data để API task gửi (không block)
+  if (apiTaskHandle != NULL && wifiConnected && roomId != "") {
+    // Kiểm tra xem có thay đổi đáng kể không
+    static float lastSentTemp = -999;
+    static bool lastSentHeater = false;
+    static bool lastSentAc = false;
+    static int lastSentFan = -1;
+    static int lastSentLight = -1;
+    static bool lastSentMotion = false;
+    static bool lastSentMode = false;
+    
+    // Đọc nhiệt độ TRỰC TIẾP từ DHT
+    float currentTemp = dht.readTemperature();
+    if (isnan(currentTemp)) {
+      currentTemp = tempRoom;
+    }
+    
+    // Đọc light và motion TRỰC TIẾP từ sensors
+    int currentLight = analogRead(LDR_PIN);
+    bool pirMotion = digitalRead(PIR_PIN);
+    bool currentMotion = pirMotion; // Phòng khách: motion = PIR trực tiếp
+    
+    // Đọc mode TRỰC TIẾP từ switch
+    bool currentMode = digitalRead(SW_MODE);
+    
+    // Kiểm tra xem có thay đổi đáng kể không
+    bool hasSignificantChange = 
+      (abs(currentTemp - lastSentTemp) > 0.5) ||
+      (heaterOn != lastSentHeater) ||
+      (acOn != lastSentAc) ||
+      (fanLevel != lastSentFan) ||
+      (lastSentLight != -1 && abs(currentLight - lastSentLight) > 200) ||
+      (currentMotion != lastSentMotion) ||
+      (currentMode != lastSentMode);
+    
+    // CHỈ gửi khi có thay đổi đáng kể
+    if (hasSignificantChange && dataMutex != NULL) {
+      if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (!sensorData.needUpdate && !isSending) {
+          // Cập nhật data TRƯỚC khi đánh dấu needUpdate
+          sensorData.tempRoom = currentTemp;
+          sensorData.hasMotion = currentMotion;
+          sensorData.lightLevel = currentLight;
+          sensorData.mode = currentMode;
+          sensorData.heaterOn = heaterOn;
+          sensorData.acOn = acOn;
+          sensorData.fanLevel = fanLevel;
+          
+          sensorData.needUpdate = true;
+          
+          Serial.print("[LOOP] Set needUpdate=true - ");
+          Serial.print("Temp:"); Serial.print(currentTemp, 1);
+          Serial.print(" Heater:"); Serial.print(heaterOn ? "ON" : "OFF");
+          Serial.print(" AC:"); Serial.print(acOn ? "ON" : "OFF");
+          Serial.print(" Fan:"); Serial.print(fanLevel);
+          Serial.print(" Light:"); Serial.print(currentLight);
+          Serial.print(" Motion:"); Serial.print(currentMotion ? "YES" : "NO");
+          Serial.print(" Mode:"); Serial.println(currentMode ? "AUTO" : "MANUAL");
+          
+          lastSentTemp = currentTemp;
+          lastSentHeater = heaterOn;
+          lastSentAc = acOn;
+          lastSentFan = fanLevel;
+          lastSentLight = currentLight;
+          lastSentMotion = currentMotion;
+          lastSentMode = currentMode;
+        }
+        xSemaphoreGive(dataMutex);
+      }
+    }
   }
 }
 
@@ -145,15 +272,7 @@ void loop() {
 void handleDustSensor() {
   dustLevel = analogRead(DUST_PIN);
   
-  // Slide potentiometer: 0-4095 (đầy đủ dải ADC)
-  // Chia đều thành 4 mức (mỗi mức 1024)
-  // 0-1023: TỐT - TRẮNG (trái cùng)
-  // 1024-2047: TRUNG BÌNH - XANH LÁ
-  // 2048-3071: KÉM - VÀNG
-  // 3072-4095: XẤU - ĐỎ (phải cùng)
-  
   if (dustLevel <= 1023) {
-    // TỐT - Màu TRẮNG (Red + Green + Blue)
     dustStatus = "TOT";
     digitalWrite(RGB_RED, HIGH);
     digitalWrite(RGB_GREEN, HIGH);
@@ -161,7 +280,6 @@ void handleDustSensor() {
     Serial.print("Bui: TOT - TRANG (");
   } 
   else if (dustLevel <= 2047) {
-    // TRUNG BÌNH - Màu XANH LÁ (Green)
     dustStatus = "TB";
     digitalWrite(RGB_RED, LOW);
     digitalWrite(RGB_GREEN, HIGH);
@@ -169,7 +287,6 @@ void handleDustSensor() {
     Serial.print("Bui: TRUNG BINH - XANH LA (");
   } 
   else if (dustLevel <= 3071) {
-    // KÉM - Màu VÀNG (Red + Green)
     dustStatus = "KEM";
     digitalWrite(RGB_RED, HIGH);
     digitalWrite(RGB_GREEN, HIGH);
@@ -177,7 +294,6 @@ void handleDustSensor() {
     Serial.print("Bui: KEM - VANG (");
   } 
   else {
-    // XẤU - Màu ĐỎ (Red)
     dustStatus = "XAU";
     digitalWrite(RGB_RED, HIGH);
     digitalWrite(RGB_GREEN, LOW);
@@ -191,27 +307,18 @@ void handleDustSensor() {
 
 // ================== ĐIỀU KHIỂN RÈM VÀ ĐÈN ==================
 void handleCurtainControl() {
-  // Đọc giá trị LDR (0-4095) và chuyển sang Lux ước tính
   int ldrValue = analogRead(LDR_PIN);
-  // Ước tính Lux: 0 (tối) -> 4095 (sáng nhất) 
-  // Giả sử 4095 ~ 1500 Lux
   luxValue = map(ldrValue, 0, 4095, 0, 1500);
   
   bool hasMotion = digitalRead(PIR_PIN);
-
+  
   // LOGIC ĐIỀU KHIỂN ĐÈN PIR DỰA TRÊN ÁNH SÁNG
   if (luxValue < 300) {
-    // Đèn bật nếu có người, tắt nếu không có người
     digitalWrite(LED_PIR, hasMotion ? HIGH : LOW);
-  } else if (luxValue >= 300 && luxValue <= 900) {
-    // Đèn tắt
-    digitalWrite(LED_PIR, LOW);
   } else {
-    // Đèn tắt
     digitalWrite(LED_PIR, LOW);
   }
-
-  // Log trạng thái ánh sáng & chuyển động
+  
   Serial.print("LDR: ");
   Serial.print(ldrValue);
   Serial.print(" -> Lux: ");
@@ -222,15 +329,20 @@ void handleCurtainControl() {
 
 // ================== LOGIC ĐIỀU KHIỂN PHÒNG ==================
 void handleSmartHome() {
-  bool autoMode = digitalRead(SW_MODE);
-
-  if (lastAutoMode && !autoMode) {
-    heaterOn = false; 
-    acOn = false; 
-    fanLevel = 0;
-    Serial.println("Mode: MANUAL - Temp Control Reset (Humidifier stays AUTO)");
+  // Đọc mode từ switch vật lý
+  bool switchMode = digitalRead(SW_MODE);
+  
+  // Chỉ cập nhật autoMode từ switch vật lý nếu switch thay đổi
+  if (switchMode != lastAutoMode) {
+    if (lastAutoMode && !switchMode) {
+      heaterOn = false; acOn = false; fanLevel = 0;
+      Serial.println("[Switch] Mode changed to MANUAL - Devices Reset");
+    }
+    autoMode = switchMode;
+    Serial.print("[Switch] Mode changed to: ");
+    Serial.println(autoMode ? "AUTO" : "MANUAL");
   }
-  lastAutoMode = autoMode;
+  lastAutoMode = switchMode;
 
   float t = dht.readTemperature();
   float h = dht.readHumidity();
@@ -249,16 +361,73 @@ void handleSmartHome() {
     humidity = h;
   }
 
-  // --- LƯU Ý: Đèn PIR đã được xử lý trong handleCurtainControl() ---
-  // Không cần xử lý lại ở đây để tránh xung đột
-
-  // --- ĐIỀU KHIỂN MÁY TẠO ẨM (Luôn tự động) ---
-  // Bật khi độ ẩm < 40% HOẶC bụi ở mức KÉM/XẤU (>= 2048)
+  // ĐIỀU KHIỂN MÁY TẠO ẨM (Luôn tự động)
   humidifierOn = (humidity < 40) || (dustLevel >= 2048);
   
-  // --- XỬ LÝ AUTO/MANUAL CHO NHIỆT ĐỘ ---
+  // --- XỬ LÝ AUTO/MANUAL ---
+  // Kiểm tra control commands từ app (chỉ áp dụng nếu không có bấm nút vật lý gần đây)
+  unsigned long now = millis();
+  bool recentlyPressedButton = (now - lastManualButtonPress) < MANUAL_BUTTON_PRIORITY_TIME;
+  
+  // CHỈ áp dụng commands từ app nếu:
+  // 1. KHÔNG có bấm nút vật lý trong 20 giây
+  // 2. VÀ không đang gửi HTTP (isSending = false)
+  // 3. VÀ đã qua ít nhất 12 giây kể từ lần gửi data cuối cùng (đủ thời gian HTTP request ~7s + app cập nhật ~5s)
+  unsigned long timeSinceLastDataSent = (now - lastDataSentTime);
+  bool dataJustSent = (lastDataSentTime > 0) && (timeSinceLastDataSent < 12000); // 12 giây
+  
+  if (serverCommands.hasCommand && !recentlyPressedButton && !dataJustSent && !isSending) {
+    // Kiểm tra thay đổi bao gồm cả mode
+    bool hasChange = (serverCommands.heaterOn != heaterOn) ||
+                     (serverCommands.acOn != acOn) ||
+                     (serverCommands.fanLevel != fanLevel) ||
+                     (serverCommands.mode != autoMode);
+    
+    if (hasChange) {
+      // Áp dụng commands từ app
+      heaterOn = serverCommands.heaterOn;
+      acOn = serverCommands.acOn;
+      fanLevel = serverCommands.fanLevel;
+      // Mode từ app - ưu tiên mode từ app khi có command
+      if (serverCommands.mode != autoMode) {
+        autoMode = serverCommands.mode;
+        Serial.print("[Control] Mode changed from app: ");
+        Serial.println(autoMode ? "AUTO" : "MANUAL");
+      }
+      
+      // Update LED
+      digitalWrite(LED_HEATER, heaterOn);
+      digitalWrite(LED_AC, acOn);
+      digitalWrite(LED_FAN, fanLevel > 0);
+      
+      Serial.print("[Control] Applied from app: Mode=");
+      Serial.print(autoMode ? "AUTO" : "MANUAL");
+      Serial.print(" H=");
+      Serial.print(heaterOn);
+      Serial.print(" AC=");
+      Serial.print(acOn);
+      Serial.print(" F=");
+      Serial.println(fanLevel);
+    } else {
+      // Giá trị từ app giống với giá trị hiện tại, không cần áp dụng
+      Serial.println("[Control] Commands from app match current state, skipping");
+    }
+    // Clear command flag sau khi xử lý
+    serverCommands.hasCommand = false;
+  } else if (serverCommands.hasCommand && (recentlyPressedButton || dataJustSent || isSending)) {
+    // Có commands từ app nhưng vừa bấm nút vật lý, vừa gửi data, hoặc đang gửi HTTP → CHẶN HOÀN TOÀN
+    if (recentlyPressedButton) {
+      Serial.println("[Control] BLOCKED - button pressed recently");
+    } else if (isSending) {
+      Serial.println("[Control] BLOCKED - HTTP request in progress");
+    } else {
+      Serial.println("[Control] BLOCKED - data just sent, ignoring to avoid loop");
+    }
+    serverCommands.hasCommand = false; // Clear để không check lại
+  }
+  
   if (autoMode) {
-    // Điều khiển nhiệt độ
+    // Logic tự động
     if (tempRoom >= 28) {
       acOn = true; heaterOn = false;
     } else if (tempRoom <= 18) {
@@ -266,20 +435,18 @@ void handleSmartHome() {
     } else if (tempRoom >= 20 && tempRoom <= 22) {
       acOn = false; heaterOn = false;
     }
-    
-    // Điều khiển quạt
     fanLevel = (tempRoom > 25) ? 1 : 0;
     
+    digitalWrite(LED_HEATER, heaterOn);
+    digitalWrite(LED_AC, acOn);
+    digitalWrite(LED_FAN, fanLevel > 0);
   } else {
     handleManualButtons();
   }
 
-  digitalWrite(LED_HEATER, heaterOn);
-  digitalWrite(LED_AC, acOn);
-  digitalWrite(LED_FAN, fanLevel > 0);
   digitalWrite(LED_HUMIDIFIER, humidifierOn);
 
-  // Hiển thị LCD - Dòng 1: Chế độ, nhiệt độ, độ ẩm
+  // Hiển thị LCD
   lcd.setCursor(0, 0);
   lcd.print(autoMode ? "AUTO" : "MAN ");
   lcd.print(" T:"); 
@@ -288,7 +455,6 @@ void handleSmartHome() {
   lcd.print((int)humidity);
   lcd.print("  ");
 
-  // Hiển thị LCD - Dòng 2: Mức bụi và trạng thái thiết bị
   lcd.setCursor(0, 1);
   lcd.print(dustStatus);
   if (dustStatus == "TB") {
@@ -311,32 +477,52 @@ void handleSmartHome() {
 
 // ================== NÚT BẤM THỦ CÔNG ==================
 void handleManualButtons() {
-  static unsigned long lastPress = 0;
-  if (millis() - lastPress < 250) return;
-
-  if (digitalRead(BTN_AC) == LOW) {
+  static unsigned long lastPressAC = 0;
+  static unsigned long lastPressFAN = 0;
+  static unsigned long lastPressHEATER = 0;
+  static bool lastBtnAC = HIGH;
+  static bool lastBtnFAN = HIGH;
+  static bool lastBtnHEATER = HIGH;
+  
+  unsigned long now = millis();
+  bool btnAC = digitalRead(BTN_AC);
+  bool btnFAN = digitalRead(BTN_FAN);
+  bool btnHEATER = digitalRead(BTN_HEATER);
+  
+  if (btnAC == LOW && lastBtnAC == HIGH && now - lastPressAC > 50) {
     acOn = !acOn;
     if (acOn) heaterOn = false;
-    lastPress = millis();
-    lastManualButtonPress = millis();
+    lastPressAC = now;
+    lastManualButtonPress = now;
+    digitalWrite(LED_AC, acOn);
+    digitalWrite(LED_HEATER, heaterOn);
     Serial.println("Manual: Toggle AC");
+    forceDataUpdate();
   }
+  lastBtnAC = btnAC;
 
-  if (digitalRead(BTN_FAN) == LOW) {
+  if (btnFAN == LOW && lastBtnFAN == HIGH && now - lastPressFAN > 50) {
     fanLevel++;
     if (fanLevel > 3) fanLevel = 0;
-    lastPress = millis();
-    lastManualButtonPress = millis();
+    lastPressFAN = now;
+    lastManualButtonPress = now;
+    digitalWrite(LED_FAN, fanLevel > 0);
     Serial.print("Manual: Fan Level "); Serial.println(fanLevel);
+    forceDataUpdate();
   }
+  lastBtnFAN = btnFAN;
 
-  if (digitalRead(BTN_HEATER) == LOW) {
+  if (btnHEATER == LOW && lastBtnHEATER == HIGH && now - lastPressHEATER > 50) {
     heaterOn = !heaterOn;
     if (heaterOn) acOn = false;
-    lastPress = millis();
-    lastManualButtonPress = millis();
+    lastPressHEATER = now;
+    lastManualButtonPress = now;
+    digitalWrite(LED_HEATER, heaterOn);
+    digitalWrite(LED_AC, acOn);
     Serial.println("Manual: Toggle Heater");
+    forceDataUpdate();
   }
+  lastBtnHEATER = btnHEATER;
 }
 
 // ================== WIFI & API IMPLEMENTATION ==================
@@ -362,10 +548,9 @@ void connectWiFi() {
   }
 }
 
-// Lấy roomId cho phòng khách (type = livingroom, name = "Phòng Khách")
 String getRoomIdByName() {
   HTTPClient http;
-  String url = String(apiBaseUrl) + "/api/rooms"; // Lấy tất cả rooms
+  String url = String(apiBaseUrl) + "/api/rooms";
   http.begin(url);
   http.setTimeout(10000);
   
@@ -404,145 +589,175 @@ String getRoomIdByName() {
   } else {
     Serial.print("Failed to get room ID, code: ");
     Serial.println(httpCode);
-    if (httpCode > 0) {
-      String errorPayload = http.getString();
-      Serial.print("Error response: ");
-      Serial.println(errorPayload);
-    }
   }
   
   http.end();
   return result;
 }
 
-// Đồng bộ: gửi sensor data lên app + nhận lệnh điều khiển
-void syncWithServer() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected, skip sync");
-    return;
+void forceDataUpdate() {
+  if (dataMutex != NULL && wifiConnected && roomId != "") {
+    if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      sensorData.tempRoom = tempRoom;
+      sensorData.hasMotion = digitalRead(PIR_PIN);
+      sensorData.lightLevel = analogRead(LDR_PIN);
+      sensorData.mode = digitalRead(SW_MODE);
+      sensorData.heaterOn = heaterOn;
+      sensorData.acOn = acOn;
+      sensorData.fanLevel = fanLevel;
+      sensorData.needUpdate = true;
+      xSemaphoreGive(dataMutex);
+      Serial.println("[Force] Data update triggered");
+    }
   }
-
-  if (roomId == "") {
-    Serial.println("Room ID is empty, skip sync");
-    return;
-  }
-
-  sendSensorData();
-  fetchControlCommands();
 }
 
-// Gửi dữ liệu cảm biến lên /api/rooms/{id}/data
-void sendSensorData() {
-  HTTPClient http;
-  String url = String(apiBaseUrl) + "/api/rooms/" + roomId + "/data";
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(5000);
-  http.setConnectTimeout(3000);
-
-  bool hasMotion = digitalRead(PIR_PIN);
-  bool autoMode = digitalRead(SW_MODE); // HIGH/LOW -> auto/manual (mapping giống logic hiện tại)
-
-  DynamicJsonDocument doc(512);
-  doc["tempRoom"] = tempRoom;
-  doc["hasMotion"] = hasMotion;
-  doc["lightLevel"] = luxValue;
-  doc["mode"] = autoMode ? "auto" : "manual";
-  doc["heaterOn"] = heaterOn;
-  doc["acOn"] = acOn;
-  doc["fanLevel"] = fanLevel;
-  doc["isUnlocked"] = true; // Phòng khách luôn không khóa
-
-  String jsonString;
-  serializeJson(doc, jsonString);
-
-  Serial.print("[LivingRoom] Sending data: ");
-  Serial.println(jsonString);
-
-  unsigned long start = millis();
-  int httpCode = http.POST(jsonString);
-  unsigned long elapsed = millis() - start;
-
-  if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
-    Serial.print("[LivingRoom] Data OK ");
-    Serial.print(elapsed);
-    Serial.println("ms");
-  } else {
-    Serial.print("[LivingRoom] Data FAIL ");
-    Serial.print(httpCode);
-    Serial.print(" (");
-    Serial.print(elapsed);
-    Serial.println("ms)");
+// FreeRTOS Task để gửi API trong background
+void apiTask(void *pvParameters) {
+  Serial.println("[API Task] Started");
+  
+  while (true) {
+    if (wifiConnected && roomId != "" && dataMutex != NULL) {
+      if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (sensorData.needUpdate) {
+          float temp = sensorData.tempRoom;
+          bool motion = sensorData.hasMotion;
+          int light = sensorData.lightLevel;
+          bool mode = sensorData.mode;
+          bool heater = sensorData.heaterOn;
+          bool ac = sensorData.acOn;
+          int fan = sensorData.fanLevel;
+          
+          isSending = true;
+          sensorData.needUpdate = false;
+          
+          xSemaphoreGive(dataMutex);
+          
+          Serial.print("[API Task] Sending data...");
+          
+          HTTPClient http;
+          String url = String(apiBaseUrl) + "/api/rooms/" + roomId + "/data";
+          http.begin(url);
+          http.addHeader("Content-Type", "application/json");
+          http.setTimeout(5000);
+          http.setConnectTimeout(3000);
+          
+          DynamicJsonDocument doc(256);
+          doc["tempRoom"] = temp;
+          doc["hasMotion"] = motion;
+          doc["lightLevel"] = light;
+          doc["mode"] = mode ? "auto" : "manual";
+          doc["heaterOn"] = heater;
+          doc["acOn"] = ac;
+          doc["fanLevel"] = fan;
+          doc["isUnlocked"] = true;
+          
+          String jsonString;
+          serializeJson(doc, jsonString);
+          
+          unsigned long start = millis();
+          int httpCode = http.POST(jsonString);
+          unsigned long elapsed = millis() - start;
+          
+          http.end();
+          
+          if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+            Serial.print("[API] OK ");
+            Serial.print(elapsed);
+            Serial.println("ms");
+            lastDataSentTime = millis();
+          } else {
+            Serial.print("[API] Fail ");
+            Serial.print(httpCode);
+            Serial.print(" (");
+            Serial.print(elapsed);
+            Serial.println("ms)");
+          }
+          
+          lastApiUpdate = millis();
+          isSending = false;
+          
+          vTaskDelay(pdMS_TO_TICKS(100));
+          
+          if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (sensorData.needUpdate && !isSending) {
+              xSemaphoreGive(dataMutex);
+              continue;
+            }
+            xSemaphoreGive(dataMutex);
+          }
+        } else {
+          xSemaphoreGive(dataMutex);
+        }
+      }
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
-
-  http.end();
 }
 
-// Lấy trạng thái điều khiển từ app (heaterOn, acOn, fanLevel)
-void fetchControlCommands() {
-  // Nếu vừa bấm nút vật lý thì ưu tiên trạng thái tại thiết bị, bỏ qua command từ app một thời gian
-  if (millis() - lastManualButtonPress < MANUAL_BUTTON_PRIORITY_TIME) {
-    Serial.println("[LivingRoom] Skipping server commands due to recent manual button press");
-    return;
-  }
-
-  HTTPClient http;
-  String url = String(apiBaseUrl) + "/api/rooms/" + roomId;
-  http.begin(url);
-  http.setTimeout(4000);
-  http.setConnectTimeout(2000);
-
-  int httpCode = http.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.print("[LivingRoom] Control GET failed: ");
-    Serial.println(httpCode);
-    http.end();
-    return;
-  }
-
-  String payload = http.getString();
-  http.end();
-
-  DynamicJsonDocument doc(2048);
-  DeserializationError error = deserializeJson(doc, payload);
-  if (error) {
-    Serial.print("[LivingRoom] JSON deserialize error: ");
-    Serial.println(error.c_str());
-    return;
-  }
-
-  bool serverHeaterOn = doc["heaterOn"].is<bool>() ? doc["heaterOn"].as<bool>() : heaterOn;
-  bool serverAcOn = doc["acOn"].is<bool>() ? doc["acOn"].as<bool>() : acOn;
-  int serverFanLevel = doc["fanLevel"].is<int>() ? doc["fanLevel"].as<int>() : fanLevel;
-
-  bool changed = false;
-
-  if (serverHeaterOn != heaterOn) {
-    heaterOn = serverHeaterOn;
-    if (heaterOn) acOn = false; // Đảm bảo không bật cả 2 cùng lúc
-    changed = true;
-    Serial.print("[LivingRoom] Apply heaterOn from app: ");
-    Serial.println(heaterOn ? "ON" : "OFF");
-  }
-
-  if (serverAcOn != acOn) {
-    acOn = serverAcOn;
-    if (acOn) heaterOn = false;
-    changed = true;
-    Serial.print("[LivingRoom] Apply acOn from app: ");
-    Serial.println(acOn ? "ON" : "OFF");
-  }
-
-  if (serverFanLevel != fanLevel) {
-    fanLevel = serverFanLevel;
-    if (fanLevel < 0) fanLevel = 0;
-    if (fanLevel > 3) fanLevel = 3;
-    changed = true;
-    Serial.print("[LivingRoom] Apply fanLevel from app: ");
-    Serial.println(fanLevel);
-  }
-
-  if (!changed) {
-    Serial.println("[LivingRoom] No control changes from app");
+// FreeRTOS Task để fetch control commands từ app
+void controlTask(void *pvParameters) {
+  Serial.println("[Control Task] Started - Fetching control commands in background");
+  
+  while (true) {
+    if (wifiConnected && roomId != "") {
+      HTTPClient http;
+      String url = String(apiBaseUrl) + "/api/rooms/" + roomId;
+      http.begin(url);
+      http.setTimeout(3000);
+      http.setConnectTimeout(2000);
+      
+      int httpCode = http.GET();
+      
+      if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        DynamicJsonDocument doc(1024);
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+          Serial.print("[Control Task] JSON deserialize error: ");
+          Serial.println(error.c_str());
+        } else {
+          // Kiểm tra xem có control commands không
+          // CHỈ set hasCommand nếu:
+          // 1. KHÔNG có bấm nút vật lý gần đây
+          // 2. VÀ không đang gửi HTTP (isSending = false)
+          // 3. VÀ đã qua ít nhất 12 giây kể từ lần gửi data cuối cùng (đủ thời gian HTTP request ~7s + app cập nhật ~5s)
+          unsigned long now = millis();
+          bool recentlyPressedButton = (now - lastManualButtonPress) < MANUAL_BUTTON_PRIORITY_TIME;
+          unsigned long timeSinceLastDataSent = (now - lastDataSentTime);
+          bool dataJustSent = (lastDataSentTime > 0) && (timeSinceLastDataSent < 12000); // 12 giây
+          
+          if (!recentlyPressedButton && !dataJustSent && !isSending && (doc.containsKey("heaterOn") || doc.containsKey("acOn") || doc.containsKey("fanLevel"))) {
+            serverCommands.hasCommand = true;
+            if (doc.containsKey("heaterOn")) {
+              serverCommands.heaterOn = doc["heaterOn"];
+            }
+            if (doc.containsKey("acOn")) {
+              serverCommands.acOn = doc["acOn"];
+            }
+            if (doc.containsKey("fanLevel")) {
+              serverCommands.fanLevel = doc["fanLevel"];
+            }
+            if (doc.containsKey("mode")) {
+              String modeStr = doc["mode"];
+              serverCommands.mode = (modeStr == "auto");
+            }
+            
+            Serial.print("[Control Task] Received commands: H=");
+            Serial.print(serverCommands.heaterOn);
+            Serial.print(" AC=");
+            Serial.print(serverCommands.acOn);
+            Serial.print(" F=");
+            Serial.println(serverCommands.fanLevel);
+          }
+        }
+      }
+      
+      http.end();
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Check mỗi 2 giây
   }
 }
