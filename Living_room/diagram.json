@@ -96,13 +96,6 @@
       "top": -140,
       "left": -290,
       "attrs": { "common": "cathode" }
-    },
-    {
-      "type": "wokwi-servo",
-      "id": "servo1",
-      "top": 60,
-      "left": -300,
-      "attrs": { "label": "REM CUA SO" }
     }
   ],
   "connections": [
@@ -146,10 +139,7 @@
     [ "rgb1:R", "esp:15", "red", [ "h0" ] ],
     [ "rgb1:G", "esp:2", "green", [ "h0" ] ],
     [ "rgb1:B", "esp:4", "blue", [ "h0" ] ],
-    [ "rgb1:COM", "esp:GND.1", "black", [ "h0" ] ],
-    [ "servo1:GND", "esp:GND.1", "black", [ "h0" ] ],
-    [ "servo1:V+", "esp:5V", "red", [ "h0" ] ],
-    [ "servo1:SIG", "esp:21", "orange", [ "h0" ] ]
+    [ "rgb1:COM", "esp:GND.1", "black", [ "h0" ] ]
   ],
   "dependencies": {}
 }
