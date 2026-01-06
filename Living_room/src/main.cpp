@@ -1,218 +1,548 @@
-#include <Keypad.h>
-#include <ESP32Servo.h>
+#include <DHT.h>
+#include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include "DHT.h" // Thêm lại thư viện DHT
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 
-// --- PIN CONFIG ---
-#define DHTPIN          13  // Chân dữ liệu DHT22
-#define DHTTYPE         DHT22
-#define POT_DUST        34  
-#define LDR_PIN         35  
-#define PIR_PIN         39  
-#define SWITCH_MODE     18
-#define BTN_HEATER      36 
-#define BTN_TV          37
-#define BTN_FAN         38
-#define SERVO_DOOR      16
-#define SERVO_CURTAIN   17
+// ================== CẤU HÌNH CHÂN ==================
+#define DHTPIN 13
+#define DHTTYPE DHT22
+#define SDA_PIN 12 
+#define SCL_PIN 14 
 
-#define LED_LIGHT       2   
-#define LO_SUOI         19  
-#define LED_TV          23  
-#define QUAT            4    
+#define PIR_PIN 27
+#define LDR_PIN 34
+#define DUST_PIN 36        // Potentiometer mô phỏng cảm biến bụi
 
-#define LED_AIR_WHITE   0
-#define LED_AIR_GREEN   15
-#define LED_AIR_YELLOW  2   
-#define LED_AIR_RED     5   
+#define LED_PIR 0
+#define LED_HEATER 25
+#define LED_FAN 33
+#define LED_AC 32
+#define LED_HUMIDIFIER 26  // LED máy tạo ẩm
 
-// --- KHỞI TẠO ĐỐI TƯỢNG ---
+// RGB LED cho mức độ bụi
+#define RGB_RED 15
+#define RGB_GREEN 2
+#define RGB_BLUE 4
+
+#define SW_MODE 35         // Switch Auto/Manual
+#define BTN_AC 19          // Button 1 - Điều hòa
+#define BTN_FAN 23         // Button 2 - Quạt
+#define BTN_HEATER 22      // Button 3 - Lò sưởi
+
+// ================== ĐỐI TƯỢNG & BIẾN ==================
 DHT dht(DHTPIN, DHTTYPE);
-Servo doorServo, curtain;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-const byte ROWS = 4, COLS = 4;
-char keys[ROWS][COLS] = {
-  {'1','2','3','A'}, {'4','5','6','B'},
-  {'7','8','9','C'}, {'*','0','#','D'}
-};
-byte rowPins[ROWS] = {32, 33, 25, 26}; 
-byte colPins[COLS] = {13, 12, 14, 27}; 
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+float tempRoom = 0;
+float humidity = 0;
+bool heaterOn = false;
+bool acOn = false;
+bool humidifierOn = false;
+int fanLevel = 0; // 0, 1, 2, 3
+bool lastAutoMode = true;
 
-// --- BIẾN ĐIỀU KHIỂN ---
-String password = "1234";
-String inputPass = "";
-bool authenticated = false;
-int heaterLevel = 0, fanLevel = 0;
-bool tvStatus = false, manualMode = false;
-bool lastBtnH = HIGH, lastBtnTV = HIGH, lastBtnF = HIGH;
-float roomTemp = 0, roomHum = 0;
+int dustLevel = 0;     // Giá trị từ 0-4095
+String dustStatus = ""; // TOT, TRUNG BINH, KEM, XAU
 
-// --- FUNCTION PROTOTYPES ---
-void handleAirFilter();
-void forceOffInterior();
-void handleKeypad();
-void showLockScreen();
-void processSmartHome();
-void handleLight(bool hasPerson);
-void handleCurtain();
-void handleClimate(bool hasPerson);
-void handleTV(bool hasPerson);
-void updateLCD(bool hasPerson);
+int luxValue = 0;      // Giá trị ánh sáng
 
+// ================== WIFI & API ==================
+const char* ssid = "Le Dinh Tuan T2";
+const char* password = "11221122";
+const char* apiBaseUrl = "https://iot-smart-home-app.vercel.app";
+String roomId = "";
+bool wifiConnected = false;
+
+// Đồng bộ định kỳ với server (gửi sensor data + nhận lệnh điều khiển)
+unsigned long lastSyncTime = 0;
+const unsigned long SYNC_INTERVAL = 2000; // ms
+
+// Ưu tiên nút vật lý sau khi bấm
+unsigned long lastManualButtonPress = 0;
+const unsigned long MANUAL_BUTTON_PRIORITY_TIME = 20000; // 20 giây
+
+// ================== FUNCTION PROTOTYPES ==================
+void handleDustSensor();
+void handleCurtainControl();
+void handleSmartHome();
+void handleManualButtons();
+void connectWiFi();
+String getRoomIdByName();
+void syncWithServer();
+void sendSensorData();
+void fetchControlCommands();
+
+// ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
-  dht.begin(); // Khởi động DHT
-
-  pinMode(LO_SUOI, OUTPUT); pinMode(QUAT, OUTPUT); 
-  pinMode(LED_TV, OUTPUT); pinMode(LED_LIGHT, OUTPUT);
-  pinMode(LED_AIR_WHITE, OUTPUT); pinMode(LED_AIR_GREEN, OUTPUT);
-  pinMode(LED_AIR_YELLOW, OUTPUT); pinMode(LED_AIR_RED, OUTPUT);
-
-  digitalWrite(LED_TV, LOW); digitalWrite(LED_LIGHT, LOW);
-
-  // Cấu hình PWM cho lò sưởi và quạt
-  ledcSetup(0, 5000, 8); // Channel 0, 5kHz, 8-bit resolution
-  ledcAttachPin(LO_SUOI, 0);
-  ledcSetup(1, 5000, 8); // Channel 1, 5kHz, 8-bit resolution
-  ledcAttachPin(QUAT, 1);
-  ledcWrite(0, 0); ledcWrite(1, 0);
-
-  pinMode(SWITCH_MODE, INPUT_PULLUP);
-  pinMode(BTN_HEATER, INPUT_PULLUP);
-  pinMode(BTN_TV, INPUT_PULLUP);
-  pinMode(BTN_FAN, INPUT_PULLUP);
-  pinMode(PIR_PIN, INPUT);
-
-  ESP32PWM::allocateTimer(0);
-  doorServo.attach(SERVO_DOOR, 500, 2400);
-  curtain.attach(SERVO_CURTAIN, 500, 2400);
+  Wire.begin(SDA_PIN, SCL_PIN);
   
-  doorServo.write(0);   
-  curtain.write(170);   
-  
+  dht.begin();
   lcd.init();
   lcd.backlight();
+  
+  pinMode(PIR_PIN, INPUT);
+  pinMode(LDR_PIN, INPUT); 
+  pinMode(DUST_PIN, INPUT);
+  pinMode(SW_MODE, INPUT); 
+  pinMode(BTN_AC, INPUT_PULLUP);
+  pinMode(BTN_FAN, INPUT_PULLUP);
+  pinMode(BTN_HEATER, INPUT_PULLUP);
+  
+  pinMode(LED_PIR, OUTPUT);
+  pinMode(LED_HEATER, OUTPUT);
+  pinMode(LED_FAN, OUTPUT);
+  pinMode(LED_AC, OUTPUT);
+  pinMode(LED_HUMIDIFIER, OUTPUT);
+  
+  pinMode(RGB_RED, OUTPUT);
+  pinMode(RGB_GREEN, OUTPUT);
+  pinMode(RGB_BLUE, OUTPUT);
+
+  lcd.setCursor(0, 0);
+  lcd.print("HE THONG SMART");
+  lcd.setCursor(0, 1);
+  lcd.print("HOME READY");
+  delay(2000);
+  lcd.clear();
+
+  tempRoom = dht.readTemperature();
+  humidity = dht.readHumidity();
+  Serial.println("Log: He thong khoi dong thanh cong.");
+
+  // Kết nối WiFi và lấy roomId của Phòng Khách
+  connectWiFi();
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    roomId = getRoomIdByName();
+    if (roomId != "") {
+      Serial.print("Room ID (Phòng Khách) found: ");
+      Serial.println(roomId);
+    } else {
+      Serial.println("Khong tim thay room 'Phòng Khách' trong database");
+    }
+  } else {
+    Serial.println("WiFi not connected, skip roomId lookup");
+  }
 }
 
+// ================== LOOP CHÍNH ==================
 void loop() {
-  handleAirFilter();
-  
-  // Đọc nhiệt độ định kỳ
-  roomTemp = dht.readTemperature();
-  roomHum = dht.readHumidity();
+  handleDustSensor();
+  handleCurtainControl();
+  handleSmartHome();
 
-  if (!authenticated) {
-    forceOffInterior(); 
-    handleKeypad();
-    showLockScreen();
+  // Đồng bộ với server định kỳ (không gọi quá nhiều)
+  if (wifiConnected && roomId != "" && millis() - lastSyncTime >= SYNC_INTERVAL) {
+    lastSyncTime = millis();
+    syncWithServer();
+  }
+}
+
+// ================== XỬ LÝ CẢM BIẾN BỤI ==================
+void handleDustSensor() {
+  dustLevel = analogRead(DUST_PIN);
+  
+  // Slide potentiometer: 0-4095 (đầy đủ dải ADC)
+  // Chia đều thành 4 mức (mỗi mức 1024)
+  // 0-1023: TỐT - TRẮNG (trái cùng)
+  // 1024-2047: TRUNG BÌNH - XANH LÁ
+  // 2048-3071: KÉM - VÀNG
+  // 3072-4095: XẤU - ĐỎ (phải cùng)
+  
+  if (dustLevel <= 1023) {
+    // TỐT - Màu TRẮNG (Red + Green + Blue)
+    dustStatus = "TOT";
+    digitalWrite(RGB_RED, HIGH);
+    digitalWrite(RGB_GREEN, HIGH);
+    digitalWrite(RGB_BLUE, HIGH);
+    Serial.print("Bui: TOT - TRANG (");
+  } 
+  else if (dustLevel <= 2047) {
+    // TRUNG BÌNH - Màu XANH LÁ (Green)
+    dustStatus = "TB";
+    digitalWrite(RGB_RED, LOW);
+    digitalWrite(RGB_GREEN, HIGH);
+    digitalWrite(RGB_BLUE, LOW);
+    Serial.print("Bui: TRUNG BINH - XANH LA (");
+  } 
+  else if (dustLevel <= 3071) {
+    // KÉM - Màu VÀNG (Red + Green)
+    dustStatus = "KEM";
+    digitalWrite(RGB_RED, HIGH);
+    digitalWrite(RGB_GREEN, HIGH);
+    digitalWrite(RGB_BLUE, LOW);
+    Serial.print("Bui: KEM - VANG (");
   } 
   else {
-    processSmartHome();
-    char key = keypad.getKey();
-    if (key == 'D') { 
-      authenticated = false;
-      inputPass = "";
-      doorServo.write(0);
-      lcd.clear();
-      forceOffInterior();
-    }
+    // XẤU - Màu ĐỎ (Red)
+    dustStatus = "XAU";
+    digitalWrite(RGB_RED, HIGH);
+    digitalWrite(RGB_GREEN, LOW);
+    digitalWrite(RGB_BLUE, LOW);
+    Serial.print("Bui: XAU - DO (");
   }
-}
-
-void handleAirFilter() {
-  int dust = analogRead(POT_DUST);
-  bool w = (dust < 1000), g = (dust >= 1000 && dust < 2000);
-  bool y = (dust >= 2000 && dust < 4000), r = (dust >= 4000);
-
-  digitalWrite(LED_AIR_WHITE, w);
-  digitalWrite(LED_AIR_GREEN, g);
-  digitalWrite(LED_AIR_YELLOW, y);
-  digitalWrite(LED_AIR_RED, r);
-}
-
-void forceOffInterior() {
-  ledcWrite(0, 0); ledcWrite(1, 0); // Channel 0 = LO_SUOI, Channel 1 = QUAT
-  digitalWrite(LED_TV, LOW); digitalWrite(LED_LIGHT, LOW);
-}
-
-void processSmartHome() {
-  manualMode = (digitalRead(SWITCH_MODE) == LOW);
-  bool hasPerson = digitalRead(PIR_PIN);
   
-  handleLight(hasPerson);
-  handleCurtain();
-  handleClimate(hasPerson); 
-  handleTV(hasPerson);      
-  updateLCD(hasPerson);
+  Serial.print(dustLevel);
+  Serial.println(")");
 }
 
-void handleClimate(bool hasPerson) {
-  if (!hasPerson) { ledcWrite(LO_SUOI, 0); ledcWrite(QUAT, 0); return; }
+// ================== ĐIỀU KHIỂN RÈM VÀ ĐÈN ==================
+void handleCurtainControl() {
+  // Đọc giá trị LDR (0-4095) và chuyển sang Lux ước tính
+  int ldrValue = analogRead(LDR_PIN);
+  // Ước tính Lux: 0 (tối) -> 4095 (sáng nhất) 
+  // Giả sử 4095 ~ 1500 Lux
+  luxValue = map(ldrValue, 0, 4095, 0, 1500);
   
-  if (manualMode) {
-    // Điều khiển thủ công bằng nút nhấn
-    if (digitalRead(BTN_HEATER) == LOW && lastBtnH == HIGH) {
-      delay(50); heaterLevel = (heaterLevel + 1) % 4;
-      ledcWrite(0, heaterLevel * 85); // Channel 0 = LO_SUOI
-    }
-    lastBtnH = digitalRead(BTN_HEATER);
-    
-    if (digitalRead(BTN_FAN) == LOW && lastBtnF == HIGH) {
-      delay(50); fanLevel = (fanLevel + 1) % 4;
-      ledcWrite(1, fanLevel * 85); // Channel 1 = QUAT
-    }
-    lastBtnF = digitalRead(BTN_FAN);
+  bool hasMotion = digitalRead(PIR_PIN);
+
+  // LOGIC ĐIỀU KHIỂN ĐÈN PIR DỰA TRÊN ÁNH SÁNG
+  if (luxValue < 300) {
+    // Đèn bật nếu có người, tắt nếu không có người
+    digitalWrite(LED_PIR, hasMotion ? HIGH : LOW);
+  } else if (luxValue >= 300 && luxValue <= 900) {
+    // Đèn tắt
+    digitalWrite(LED_PIR, LOW);
   } else {
-    // CHẾ ĐỘ TỰ ĐỘNG DỰA TRÊN DHT
-    if (isnan(roomTemp)) return; 
-    if (roomTemp < 20) { ledcWrite(0, 255); ledcWrite(1, 0); } // Channel 0 = LO_SUOI, Channel 1 = QUAT
-    else if (roomTemp > 28) { ledcWrite(0, 0); ledcWrite(1, 255); }
-    else { ledcWrite(0, 0); ledcWrite(1, 0); }
+    // Đèn tắt
+    digitalWrite(LED_PIR, LOW);
+  }
+
+  // Log trạng thái ánh sáng & chuyển động
+  Serial.print("LDR: ");
+  Serial.print(ldrValue);
+  Serial.print(" -> Lux: ");
+  Serial.print(luxValue);
+  Serial.print(" | Den: ");
+  Serial.println(hasMotion && luxValue < 300 ? "ON" : "OFF");
+}
+
+// ================== LOGIC ĐIỀU KHIỂN PHÒNG ==================
+void handleSmartHome() {
+  bool autoMode = digitalRead(SW_MODE);
+
+  if (lastAutoMode && !autoMode) {
+    heaterOn = false; 
+    acOn = false; 
+    fanLevel = 0;
+    Serial.println("Mode: MANUAL - Temp Control Reset (Humidifier stays AUTO)");
+  }
+  lastAutoMode = autoMode;
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  
+  if (!isnan(t)) {
+    if (t > 100) {
+      Serial.println("!!! CANH BAO CHAY: NHIET DO > 100 !!!");
+      heaterOn = false; acOn = false;
+    }
+    if (heaterOn) tempRoom += 0.05;
+    if (acOn) tempRoom -= 0.05;
+    if (abs(t - tempRoom) > 1.0) tempRoom = t; 
+  }
+  
+  if (!isnan(h)) {
+    humidity = h;
+  }
+
+  // --- LƯU Ý: Đèn PIR đã được xử lý trong handleCurtainControl() ---
+  // Không cần xử lý lại ở đây để tránh xung đột
+
+  // --- ĐIỀU KHIỂN MÁY TẠO ẨM (Luôn tự động) ---
+  // Bật khi độ ẩm < 40% HOẶC bụi ở mức KÉM/XẤU (>= 2048)
+  humidifierOn = (humidity < 40) || (dustLevel >= 2048);
+  
+  // --- XỬ LÝ AUTO/MANUAL CHO NHIỆT ĐỘ ---
+  if (autoMode) {
+    // Điều khiển nhiệt độ
+    if (tempRoom >= 28) {
+      acOn = true; heaterOn = false;
+    } else if (tempRoom <= 18) {
+      heaterOn = true; acOn = false;
+    } else if (tempRoom >= 20 && tempRoom <= 22) {
+      acOn = false; heaterOn = false;
+    }
+    
+    // Điều khiển quạt
+    fanLevel = (tempRoom > 25) ? 1 : 0;
+    
+  } else {
+    handleManualButtons();
+  }
+
+  digitalWrite(LED_HEATER, heaterOn);
+  digitalWrite(LED_AC, acOn);
+  digitalWrite(LED_FAN, fanLevel > 0);
+  digitalWrite(LED_HUMIDIFIER, humidifierOn);
+
+  // Hiển thị LCD - Dòng 1: Chế độ, nhiệt độ, độ ẩm
+  lcd.setCursor(0, 0);
+  lcd.print(autoMode ? "AUTO" : "MAN ");
+  lcd.print(" T:"); 
+  lcd.print(tempRoom, 1); 
+  lcd.print(" H:");
+  lcd.print((int)humidity);
+  lcd.print("  ");
+
+  // Hiển thị LCD - Dòng 2: Mức bụi và trạng thái thiết bị
+  lcd.setCursor(0, 1);
+  lcd.print(dustStatus);
+  if (dustStatus == "TB") {
+    lcd.print("  ");
+  } else if (dustStatus == "KEM") {
+    lcd.print(" ");
+  } else {
+    lcd.print("   ");
+  }
+  
+  lcd.print(heaterOn ? "H" : " ");
+  lcd.print(acOn ? "A" : " ");
+  lcd.print(humidifierOn ? "M" : " ");
+  lcd.print(" F:");
+  lcd.print(fanLevel);
+  lcd.print("  ");
+
+  delay(200);
+}
+
+// ================== NÚT BẤM THỦ CÔNG ==================
+void handleManualButtons() {
+  static unsigned long lastPress = 0;
+  if (millis() - lastPress < 250) return;
+
+  if (digitalRead(BTN_AC) == LOW) {
+    acOn = !acOn;
+    if (acOn) heaterOn = false;
+    lastPress = millis();
+    lastManualButtonPress = millis();
+    Serial.println("Manual: Toggle AC");
+  }
+
+  if (digitalRead(BTN_FAN) == LOW) {
+    fanLevel++;
+    if (fanLevel > 3) fanLevel = 0;
+    lastPress = millis();
+    lastManualButtonPress = millis();
+    Serial.print("Manual: Fan Level "); Serial.println(fanLevel);
+  }
+
+  if (digitalRead(BTN_HEATER) == LOW) {
+    heaterOn = !heaterOn;
+    if (heaterOn) acOn = false;
+    lastPress = millis();
+    lastManualButtonPress = millis();
+    Serial.println("Manual: Toggle Heater");
   }
 }
 
-void updateLCD(bool hasPerson) {
-  lcd.setCursor(0, 0);
-  lcd.print("T:"); lcd.print((int)roomTemp); lcd.print("C ");
-  lcd.print("H:"); lcd.print((int)roomHum); lcd.print("%");
-  lcd.setCursor(0, 1);
-  lcd.print(manualMode ? "MANUAL " : "AUTO   ");
-  lcd.print(hasPerson ? "P:ON " : "P:OFF");
+// ================== WIFI & API IMPLEMENTATION ==================
+
+void connectWiFi() {
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(ssid, password);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println();
+    Serial.print("WiFi connected! IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println();
+    Serial.println("WiFi connection failed!");
+  }
 }
 
-// ... (Các hàm handleKeypad, handleTV, handleLight, handleCurtain, showLockScreen giữ nguyên)
-void handleKeypad() {
-  char key = keypad.getKey();
-  if (!key) return;
-  if (key == '#') {
-    if (inputPass == password) { authenticated = true; doorServo.write(90); lcd.clear(); }
-    else { inputPass = ""; lcd.setCursor(0,1); lcd.print("SAI MAT KHAU!   "); delay(1000); }
-  } else if (key == '*') inputPass = "";
-  else if (inputPass.length() < 4) inputPass += key;
+// Lấy roomId cho phòng khách (type = livingroom, name = "Phòng Khách")
+String getRoomIdByName() {
+  HTTPClient http;
+  String url = String(apiBaseUrl) + "/api/rooms"; // Lấy tất cả rooms
+  http.begin(url);
+  http.setTimeout(10000);
+  
+  int httpCode = http.GET();
+  String result = "";
+  
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (error) {
+      Serial.print("JSON parse error: ");
+      Serial.println(error.c_str());
+    } else if (doc.is<JsonArray>()) {
+      JsonArray rooms = doc.as<JsonArray>();
+      
+      for (JsonObject room : rooms) {
+        String type = room["type"].as<String>();
+        String name = room["name"].as<String>();
+        
+        if (type == "livingroom" || name == "Phòng Khách") {
+          result = room["_id"].as<String>();
+          Serial.print("Room ID found: ");
+          Serial.println(result);
+          Serial.print("Room name: ");
+          Serial.println(name);
+          break;
+        }
+      }
+      
+      if (result == "") {
+        Serial.println("Room 'Phòng Khách' (livingroom) not found in database");
+      }
+    }
+  } else {
+    Serial.print("Failed to get room ID, code: ");
+    Serial.println(httpCode);
+    if (httpCode > 0) {
+      String errorPayload = http.getString();
+      Serial.print("Error response: ");
+      Serial.println(errorPayload);
+    }
+  }
+  
+  http.end();
+  return result;
 }
 
-void handleTV(bool hasPerson) {
-  if (manualMode) {
-    bool btn = digitalRead(BTN_TV);
-    if (btn == LOW && lastBtnTV == HIGH) { delay(50); tvStatus = !tvStatus; }
-    lastBtnTV = btn;
-  } else tvStatus = hasPerson;
-  digitalWrite(LED_TV, tvStatus);
+// Đồng bộ: gửi sensor data lên app + nhận lệnh điều khiển
+void syncWithServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected, skip sync");
+    return;
+  }
+
+  if (roomId == "") {
+    Serial.println("Room ID is empty, skip sync");
+    return;
+  }
+
+  sendSensorData();
+  fetchControlCommands();
 }
 
-void handleLight(bool hasPerson) {
-  digitalWrite(LED_LIGHT, (analogRead(LDR_PIN) > 2000 && hasPerson));
+// Gửi dữ liệu cảm biến lên /api/rooms/{id}/data
+void sendSensorData() {
+  HTTPClient http;
+  String url = String(apiBaseUrl) + "/api/rooms/" + roomId + "/data";
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(5000);
+  http.setConnectTimeout(3000);
+
+  bool hasMotion = digitalRead(PIR_PIN);
+  bool autoMode = digitalRead(SW_MODE); // HIGH/LOW -> auto/manual (mapping giống logic hiện tại)
+
+  DynamicJsonDocument doc(512);
+  doc["tempRoom"] = tempRoom;
+  doc["hasMotion"] = hasMotion;
+  doc["lightLevel"] = luxValue;
+  doc["mode"] = autoMode ? "auto" : "manual";
+  doc["heaterOn"] = heaterOn;
+  doc["acOn"] = acOn;
+  doc["fanLevel"] = fanLevel;
+  doc["isUnlocked"] = true; // Phòng khách luôn không khóa
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  Serial.print("[LivingRoom] Sending data: ");
+  Serial.println(jsonString);
+
+  unsigned long start = millis();
+  int httpCode = http.POST(jsonString);
+  unsigned long elapsed = millis() - start;
+
+  if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+    Serial.print("[LivingRoom] Data OK ");
+    Serial.print(elapsed);
+    Serial.println("ms");
+  } else {
+    Serial.print("[LivingRoom] Data FAIL ");
+    Serial.print(httpCode);
+    Serial.print(" (");
+    Serial.print(elapsed);
+    Serial.println("ms)");
+  }
+
+  http.end();
 }
 
-void handleCurtain() {
-  int lux = analogRead(LDR_PIN);
-  curtain.write((lux > 3500 || lux < 500) ? 170 : 10);
-}
+// Lấy trạng thái điều khiển từ app (heaterOn, acOn, fanLevel)
+void fetchControlCommands() {
+  // Nếu vừa bấm nút vật lý thì ưu tiên trạng thái tại thiết bị, bỏ qua command từ app một thời gian
+  if (millis() - lastManualButtonPress < MANUAL_BUTTON_PRIORITY_TIME) {
+    Serial.println("[LivingRoom] Skipping server commands due to recent manual button press");
+    return;
+  }
 
-void showLockScreen() {
-  lcd.setCursor(0, 0); lcd.print("CUA DANG KHOA ");
-  lcd.setCursor(0, 1); lcd.print("PASS: ");
-  for(int i=0; i<inputPass.length(); i++) lcd.print("*");
+  HTTPClient http;
+  String url = String(apiBaseUrl) + "/api/rooms/" + roomId;
+  http.begin(url);
+  http.setTimeout(4000);
+  http.setConnectTimeout(2000);
+
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.print("[LivingRoom] Control GET failed: ");
+    Serial.println(httpCode);
+    http.end();
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  DynamicJsonDocument doc(2048);
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    Serial.print("[LivingRoom] JSON deserialize error: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  bool serverHeaterOn = doc["heaterOn"].is<bool>() ? doc["heaterOn"].as<bool>() : heaterOn;
+  bool serverAcOn = doc["acOn"].is<bool>() ? doc["acOn"].as<bool>() : acOn;
+  int serverFanLevel = doc["fanLevel"].is<int>() ? doc["fanLevel"].as<int>() : fanLevel;
+
+  bool changed = false;
+
+  if (serverHeaterOn != heaterOn) {
+    heaterOn = serverHeaterOn;
+    if (heaterOn) acOn = false; // Đảm bảo không bật cả 2 cùng lúc
+    changed = true;
+    Serial.print("[LivingRoom] Apply heaterOn from app: ");
+    Serial.println(heaterOn ? "ON" : "OFF");
+  }
+
+  if (serverAcOn != acOn) {
+    acOn = serverAcOn;
+    if (acOn) heaterOn = false;
+    changed = true;
+    Serial.print("[LivingRoom] Apply acOn from app: ");
+    Serial.println(acOn ? "ON" : "OFF");
+  }
+
+  if (serverFanLevel != fanLevel) {
+    fanLevel = serverFanLevel;
+    if (fanLevel < 0) fanLevel = 0;
+    if (fanLevel > 3) fanLevel = 3;
+    changed = true;
+    Serial.print("[LivingRoom] Apply fanLevel from app: ");
+    Serial.println(fanLevel);
+  }
+
+  if (!changed) {
+    Serial.println("[LivingRoom] No control changes from app");
+  }
 }

@@ -1,87 +1,155 @@
 {
   "version": 1,
-  "author": "Smart Home Pro - Final Fix",
+  "author": "Fixed by ChatGPT",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0 },
-    { "type": "wokwi-lcd1602", "id": "lcd1", "top": 350, "left": 60, "attrs": { "pins": "i2c" } },
-    { "type": "wokwi-photoresistor", "id": "ldr1", "top": -250, "left": 500 },
-    { "type": "wokwi-potentiometer", "id": "pot_dust", "top": 200, "left": 550, "attrs": { "label": "BUI" } },
-    { "type": "wokwi-led", "id": "air_w", "top": 280, "left": 360, "attrs": { "color": "white", "label": "W" } },
-    { "type": "wokwi-led", "id": "air_g", "top": 280, "left": 400, "attrs": { "color": "green", "label": "G" } },
-    { "type": "wokwi-led", "id": "air_y", "top": 280, "left": 440, "attrs": { "color": "yellow", "label": "Y" } },
-    { "type": "wokwi-led", "id": "air_r", "top": 280, "left": 480, "attrs": { "color": "red", "label": "R" } },
-    { "type": "wokwi-led", "id": "led_tv", "top": 40, "left": 400, "attrs": { "color": "yellow", "label": "TV" } },
-    { "type": "wokwi-led", "id": "led_heater", "top": 90, "left": 400, "attrs": { "color": "red", "label": "H" } },
-    { "type": "wokwi-led", "id": "led_fan", "top": 140, "left": 400, "attrs": { "color": "green", "label": "F" } },
-    { "type": "wokwi-membrane-keypad", "id": "keypad1", "top": -220, "left": -280 },
-    { "type": "wokwi-pushbutton", "id": "btn_h", "top": 110, "left": -120, "attrs": { "label": "H" } },
-    { "type": "wokwi-pushbutton", "id": "btn_f", "top": 170, "left": -120, "attrs": { "label": "F" } },
-    { "type": "wokwi-pushbutton", "id": "btn_tv", "top": 230, "left": -120, "attrs": { "label": "TV" } },
-    { "type": "wokwi-slide-switch", "id": "sw1", "top": 50, "left": -120, "attrs": { "label": "MODE" } },
-    { "type": "wokwi-servo", "id": "servo_door", "top": -380, "left": 50 },
-    { "type": "wokwi-servo", "id": "servo_curtain", "top": -380, "left": 250 },{ "type": "wokwi-dht22", "id": "dht1", "top": -150, "left": 400, "attrs": {} },
-    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": -120, "left": 650 }
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": -240,
+      "left": 150,
+      "attrs": { "temperature": "20.5", "humidity": "53" }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": 256,
+      "left": -148,
+      "attrs": { "pins": "i2c" }
+    },
+    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": -25, "left": 380, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led_pir",
+      "top": -110,
+      "left": 310,
+      "attrs": { "color": "blue", "label": "PIR" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_heater",
+      "top": 110,
+      "left": 320,
+      "attrs": { "color": "blue", "label": "LO SUOI" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_fan",
+      "top": 150,
+      "left": 320,
+      "attrs": { "color": "green", "label": "QUAT" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_ac",
+      "top": 190,
+      "left": 320,
+      "attrs": { "color": "red", "label": "DIEU HOA" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_humidifier",
+      "top": 230,
+      "left": 320,
+      "attrs": { "color": "cyan", "label": "MAY TAO AM" }
+    },
+    { "type": "wokwi-slide-switch", "id": "sw1", "top": 167.6, "left": -112.1, "attrs": {} },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 207.8,
+      "left": 451.2,
+      "attrs": { "color": "red", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn2",
+      "top": 159.8,
+      "left": 451.2,
+      "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn3",
+      "top": 111.8,
+      "left": 451.2,
+      "attrs": { "color": "blue", "xray": "1" }
+    },
+    {
+      "type": "wokwi-photoresistor-sensor",
+      "id": "ldr1",
+      "top": -169.6,
+      "left": 365.6,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-slide-potentiometer",
+      "id": "pot1",
+      "top": -49.3,
+      "left": -297.8,
+      "attrs": { "label": "BUI PM2.5" }
+    },
+    {
+      "type": "wokwi-rgb-led",
+      "id": "rgb1",
+      "top": -140,
+      "left": -290,
+      "attrs": { "common": "cathode" }
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo1",
+      "top": 60,
+      "left": -300,
+      "attrs": { "label": "REM CUA SO" }
+    }
   ],
   "connections": [
-    [ "esp:GND.1", "lcd1:GND", "black", [] ],
-    [ "esp:5V", "lcd1:VCC", "red", [] ],
-    [ "esp:21", "lcd1:SDA", "green", [] ],
-    [ "esp:22", "lcd1:SCL", "blue", [] ],
-    [ "esp:34", "pot_dust:SIG", "orange", [] ],
-    [ "esp:GND.1", "pot_dust:GND", "black", [] ],
-    [ "esp:3V3", "pot_dust:VCC", "red", [] ],
-    
-    [ "esp:0", "air_w:A", "white", [] ],
-    [ "esp:15", "air_g:A", "green", [] ],
-    [ "esp:2", "air_y:A", "yellow", [] ],
-    [ "esp:5", "air_r:A", "red", [] ],
-    
-    [ "esp:GND.1", "air_w:C", "black", [] ],
-    [ "esp:GND.1", "air_g:C", "black", [] ],
-    [ "esp:GND.1", "air_y:C", "black", [] ],
-    [ "esp:GND.1", "air_r:C", "black", [] ],
-    
-    [ "esp:23", "led_tv:A", "yellow", [] ],
-    [ "esp:19", "led_heater:A", "red", [] ],
-    [ "esp:4", "led_fan:A", "green", [] ],
-    [ "esp:GND.1", "led_tv:C", "black", [] ],
-    [ "esp:GND.1", "led_heater:C", "black", [] ],
-    [ "esp:GND.1", "led_fan:C", "black", [] ],
-    
-    [ "esp:18", "sw1:2", "green", [] ],
-    [ "esp:GND.1", "sw1:1", "black", [] ],
-    [ "esp:36", "btn_h:1.l", "red", [] ],
-    [ "esp:37", "btn_tv:1.l", "yellow", [] ],
-    [ "esp:38", "btn_f:1.l", "green", [] ],
-    [ "esp:GND.1", "btn_h:2.r", "black", [] ],
-    [ "esp:GND.1", "btn_tv:2.r", "black", [] ],
-    [ "esp:GND.1", "btn_f:2.r", "black", [] ],
-    
-    [ "esp:16", "servo_door:PWM", "orange", [] ],
-    [ "esp:17", "servo_curtain:PWM", "blue", [] ],
-    [ "esp:GND.1", "servo_door:GND", "black", [] ],
-    [ "esp:GND.1", "servo_curtain:GND", "black", [] ],
-    [ "esp:5V", "servo_door:V+", "red", [] ],
-    [ "esp:5V", "servo_curtain:V+", "red", [] ],
-    
-    [ "esp:35", "ldr1:SIG", "yellow", [] ],
-    [ "esp:GND.1", "ldr1:VCC", "black", [] ],
-    [ "esp:3V3", "ldr1:GND", "red", [] ],
-    
-    [ "esp:39", "pir1:OUT", "purple", [] ],
-    [ "esp:GND.1", "pir1:GND", "black", [] ],
-    [ "esp:5V", "pir1:VCC", "red", [] ],[ "esp:13", "dht1:SDA", "yellow", [] ],
-[ "esp:5V", "dht1:VCC", "red", [] ],
-[ "esp:GND.1", "dht1:GND", "black", [] ],
-
-    [ "keypad1:R1", "esp:32", "green", [] ],
-    [ "keypad1:R2", "esp:33", "green", [] ],
-    [ "keypad1:R3", "esp:25", "green", [] ],
-    [ "keypad1:R4", "esp:26", "green", [] ],
-    [ "keypad1:C1", "esp:13", "green", [] ],
-    [ "keypad1:C2", "esp:12", "green", [] ],
-    [ "keypad1:C3", "esp:14", "green", [] ],
-    [ "keypad1:C4", "esp:27", "green", [] ]
-  ]
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:3V3", "dht1:VCC", "red", [] ],
+    [ "dht1:GND", "esp:GND.1", "black", [] ],
+    [ "dht1:SDA", "esp:13", "green", [] ],
+    [ "esp:12", "lcd1:SDA", "green", [] ],
+    [ "esp:14", "lcd1:SCL", "yellow", [] ],
+    [ "esp:3V3", "lcd1:VCC", "red", [] ],
+    [ "lcd1:GND", "esp:GND.2", "black", [] ],
+    [ "pir1:VCC", "esp:5V", "red", [] ],
+    [ "pir1:GND", "esp:GND.1", "black", [] ],
+    [ "pir1:OUT", "esp:27", "green", [] ],
+    [ "led_pir:A", "esp:0", "green", [] ],
+    [ "led_pir:C", "esp:GND.3", "black", [] ],
+    [ "led_heater:A", "esp:25", "green", [] ],
+    [ "led_heater:C", "esp:GND.3", "black", [] ],
+    [ "led_fan:A", "esp:33", "green", [] ],
+    [ "led_fan:C", "esp:GND.3", "black", [] ],
+    [ "led_ac:A", "esp:32", "green", [] ],
+    [ "led_ac:C", "esp:GND.3", "black", [] ],
+    [ "led_humidifier:A", "esp:26", "cyan", [] ],
+    [ "led_humidifier:C", "esp:GND.3", "black", [] ],
+    [ "sw1:3", "esp:3V3", "green", [ "v0" ] ],
+    [ "sw1:1", "esp:GND.1", "green", [ "v0" ] ],
+    [ "sw1:2", "esp:35", "green", [ "v0" ] ],
+    [ "btn1:1.l", "esp:19", "red", [ "h0" ] ],
+    [ "btn2:1.l", "esp:23", "green", [ "h0" ] ],
+    [ "btn3:1.l", "esp:22", "blue", [ "h0" ] ],
+    [ "btn1:2.r", "esp:GND.2", "red", [ "v0" ] ],
+    [ "btn2:2.r", "esp:GND.2", "green", [ "v0" ] ],
+    [ "btn3:2.r", "esp:GND.2", "blue", [ "v0" ] ],
+    [ "ldr1:AO", "esp:34", "green", [ "h0" ] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [ "h0" ] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [ "h0" ] ],
+    [ "pot1:SIG", "esp:36", "green", [ "h0" ] ],
+    [ "pot1:VCC", "esp:3V3", "red", [ "h0" ] ],
+    [ "pot1:GND", "esp:GND.1", "black", [ "h0" ] ],
+    [ "rgb1:R", "esp:15", "red", [ "h0" ] ],
+    [ "rgb1:G", "esp:2", "green", [ "h0" ] ],
+    [ "rgb1:B", "esp:4", "blue", [ "h0" ] ],
+    [ "rgb1:COM", "esp:GND.1", "black", [ "h0" ] ],
+    [ "servo1:GND", "esp:GND.1", "black", [ "h0" ] ],
+    [ "servo1:V+", "esp:5V", "red", [ "h0" ] ],
+    [ "servo1:SIG", "esp:21", "orange", [ "h0" ] ]
+  ],
+  "dependencies": {}
 }
